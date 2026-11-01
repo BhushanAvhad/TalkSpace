@@ -18,6 +18,17 @@ const {
 } = require('./storageService');
 
 const app = express();
+
+// Health check endpoint for Render / Load Balancers
+app.get("/health", (req, res) => {
+    res.status(200).json({
+        status: "OK",
+        message: "TalkSpace backend is running",
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    });
+});
+
 const server = http.createServer(app);
 
 // Allowed Origins for CORS (Vercel deployment, custom domain, local dev)
@@ -287,7 +298,7 @@ app.post('/upload', (req, res) => {
         const target = (req.body.target || '').trim();
 
         recordFilePermission(req.file.filename, sender, target, isPrivate);
-        uploadToSupabaseStorage(req.file.filename, req.file.path, req.file.mimetype).catch(() => {});
+        uploadToSupabaseStorage(req.file.filename, req.file.path, req.file.mimetype).catch(() => { });
 
         res.json({
             fileURL: `/api/files/${req.file.filename}`,
@@ -310,7 +321,7 @@ app.post('/uploadProfilePic', (req, res) => {
             return res.status(400).json({ error: 'No image file uploaded.' });
         }
 
-        uploadToSupabaseStorage(file.filename, file.path, file.mimetype).catch(() => {});
+        uploadToSupabaseStorage(file.filename, file.path, file.mimetype).catch(() => { });
 
         const avatarUrl = `/api/files/${file.filename}`;
         res.json({ success: true, avatarUrl, fileURL: avatarUrl });
@@ -347,15 +358,6 @@ async function handleFileRequest(req, res) {
 
 app.get('/api/files/:filename', handleFileRequest);
 app.get('/uploads/:filename', handleFileRequest);
-
-// Simple Health Check Endpoint for Render / Load Balancers
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'ok',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString()
-    });
-});
 
 // Detailed Health & Retention status endpoint
 app.get('/api/health', (req, res) => {
@@ -1062,7 +1064,7 @@ io.on('connection', (socket) => {
                     .ilike('username', cleanUser)
                     .maybeSingle();
                 userRecord = data;
-            } catch (e) {}
+            } catch (e) { }
 
             socket.emit('userProfileResult', {
                 username: cleanUser,
@@ -1142,7 +1144,7 @@ server.listen(PORT, HOST, () => {
     console.log(`🚀 TalkSpace server running on http://${HOST}:${PORT}`);
     console.log(`📡 Supabase database: ${process.env.SUPABASE_URL ? 'Connected' : 'Missing credentials in .env'}`);
     console.log(`☁️ Supabase Storage bucket: ${process.env.SUPABASE_STORAGE_BUCKET || 'talkspace-files'}`);
-    
+
     // Start automated hourly message retention and attachment cleanup scheduler
     startRetentionScheduler(io, uploadDir);
 });
