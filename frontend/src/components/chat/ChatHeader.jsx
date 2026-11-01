@@ -95,3 +95,4 @@ export function ChatHeader({ onOpenMobileSidebar }) {
 }
 
 export default ChatHeader;
+

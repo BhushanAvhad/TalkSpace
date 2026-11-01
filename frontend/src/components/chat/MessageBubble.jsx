@@ -121,3 +121,4 @@ export function MessageBubble({ message, isMe }) {
 }
 
 export default MessageBubble;
+

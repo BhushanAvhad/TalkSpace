@@ -1,15 +1,25 @@
-import React, { useState } from 'react';
-import { User, Lock, ArrowRight, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Lock, ArrowRight, X } from 'lucide-react';
 import { Logo } from '@/components/brand/Logo';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useAuthStore } from '@/stores/useAuthStore';
 
-export function AuthModal() {
-  const [isRegister, setIsRegister] = useState(false);
+export function AuthModal({ initialMode = 'login', onClose, onSuccess }) {
+  const [isRegister, setIsRegister] = useState(initialMode === 'register');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const { login, register, isLoading, authError } = useAuthStore();
+  const { login, register, isLoading, authError, isAuthenticated } = useAuthStore();
+
+  useEffect(() => {
+    setIsRegister(initialMode === 'register');
+  }, [initialMode]);
+
+  useEffect(() => {
+    if (isAuthenticated && onSuccess) {
+      onSuccess();
+    }
+  }, [isAuthenticated, onSuccess]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -24,7 +34,22 @@ export function AuthModal() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-xl animate-fade-in">
-      <div className="w-full max-w-md p-8 rounded-2xl border border-border bg-card/95 text-card-foreground shadow-glow-lg transition-all relative overflow-hidden">
+      {/* Click backdrop to close */}
+      <div className="fixed inset-0" onClick={onClose} />
+
+      <div className="w-full max-w-md p-8 rounded-3xl border border-border bg-card/95 text-card-foreground shadow-glow-lg transition-all relative overflow-hidden z-10">
+        {/* Close Button */}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-5 right-5 p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            aria-label="Close modal"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+
         {/* Subtle decorative gradient aura */}
         <div className="absolute -top-24 -right-24 w-48 h-48 bg-primary/20 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-purple-500/20 rounded-full blur-3xl pointer-events-none" />
