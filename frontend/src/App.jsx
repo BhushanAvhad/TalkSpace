@@ -9,6 +9,7 @@ import { Sidebar } from '@/components/chat/Sidebar';
 import { ChatHeader } from '@/components/chat/ChatHeader';
 import { MessageList } from '@/components/chat/MessageList';
 import { MessageInput } from '@/components/chat/MessageInput';
+import { SharedMediaPanel } from '@/components/chat/SharedMediaPanel';
 
 export function App() {
   const { user, isAuthenticated, setUser, setAuthError } = useAuthStore();
@@ -20,18 +21,26 @@ export function App() {
     addChatRequest,
     setTypingUser,
     setCurrentChat,
+    setConnectionStatus,
+    sharedMediaOpen,
+    setSharedMediaOpen,
   } = useChatStore();
 
   // 'landing' | 'auth' | 'chat'
   const [currentView, setCurrentView] = useState('landing');
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [conversationSearchQuery, setConversationSearchQuery] = useState('');
 
   // Global Socket.IO event listeners
   useEffect(() => {
     if (!socket.connected) {
       socket.connect();
     }
+
+    const handleConnect = () => setConnectionStatus('connected');
+    const handleDisconnect = () => setConnectionStatus('disconnected');
+    const handleConnectError = () => setConnectionStatus('disconnected');
 
     const handleAuthResult = (result) => {
       if (result.success) {
@@ -82,6 +91,15 @@ export function App() {
       setTypingUser(null);
     };
 
+    const handleGroupHistoryPurged = () => {
+      if (socket.connected) {
+        socket.emit('requestGroupHistory');
+      }
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+    socket.on('connect_error', handleConnectError);
     socket.on('authResult', handleAuthResult);
     socket.on('message', handleMessage);
     socket.on('updateUsers', handleUpdateUsers);
@@ -91,8 +109,12 @@ export function App() {
     socket.on('chatResponse', handleChatResponse);
     socket.on('displayTyping', handleDisplayTyping);
     socket.on('stopTyping', handleStopTyping);
+    socket.on('groupHistoryPurged', handleGroupHistoryPurged);
 
     return () => {
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('connect_error', handleConnectError);
       socket.off('authResult', handleAuthResult);
       socket.off('message', handleMessage);
       socket.off('updateUsers', handleUpdateUsers);
@@ -102,6 +124,7 @@ export function App() {
       socket.off('chatResponse', handleChatResponse);
       socket.off('displayTyping', handleDisplayTyping);
       socket.off('stopTyping', handleStopTyping);
+      socket.off('groupHistoryPurged', handleGroupHistoryPurged);
     };
   }, [user?.username]);
 
@@ -172,10 +195,20 @@ export function App() {
 
           {/* Main Realtime Chat Viewport */}
           <main className="flex-1 flex flex-col h-full overflow-hidden bg-background">
-            <ChatHeader onOpenMobileSidebar={() => setMobileSidebarOpen(true)} />
-            <MessageList />
+            <ChatHeader
+              onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+              onSearchConversation={setConversationSearchQuery}
+              conversationSearchQuery={conversationSearchQuery}
+            />
+            <MessageList searchQuery={conversationSearchQuery} />
             <MessageInput />
           </main>
+
+          {/* Shared Media Gallery Drawer Panel */}
+          <SharedMediaPanel
+            open={sharedMediaOpen}
+            onClose={() => setSharedMediaOpen(false)}
+          />
         </div>
       ) : null}
     </>

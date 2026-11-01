@@ -17,6 +17,7 @@ lib/
 # User upload directories / legacy dumps
 prsattdone-1march/
 public/uploads/
+uploads/
 
 # OS / Editor files
 .DS_Store

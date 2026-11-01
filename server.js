@@ -7,6 +7,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
 const supabase = require('./supabaseClient');
+const { startRetentionScheduler, getRetentionHours, executeRetentionCleanup } = require('./retentionService');
 
 const app = express();
 const server = http.createServer(app);
@@ -21,20 +22,94 @@ const PORT = process.env.PORT || 3000;
 const users = new Map(); // Store users as { socketId → { username, profileImage } }
 const sentMessageIds = new Set(); // Store sent message IDs to prevent duplicates
 
-// Create 'uploads' folder if it doesn't exist
-const uploadDir = path.join(__dirname, 'public', 'uploads');
+// Supported & Protected File Extensions and MIME Types
+const ALLOWED_EXTENSIONS = new Set([
+    '.jpg', '.jpeg', '.png', '.webp', '.gif',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx',
+    '.ppt', '.pptx', '.txt', '.csv'
+]);
+
+const ALLOWED_MIME_TYPES = new Set([
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/plain',
+    'text/csv'
+]);
+
+const DANGEROUS_EXTENSIONS = new Set([
+    '.exe', '.bat', '.cmd', '.sh', '.vbs', '.js', '.mjs',
+    '.msi', '.dll', '.scr', '.jar', '.php', '.py', '.ps1',
+    '.com', '.hta', '.app', '.vbe', '.jse', '.wsf', '.wsh'
+]);
+
+// Protected Uploads Directory (outside public folder to prevent unauthorized static access)
+const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Configure Multer for file uploads
+// Migrate legacy files from public/uploads if any existed
+const legacyUploadDir = path.join(__dirname, 'public', 'uploads');
+if (fs.existsSync(legacyUploadDir)) {
+    try {
+        const legacyFiles = fs.readdirSync(legacyUploadDir);
+        for (const file of legacyFiles) {
+            const src = path.join(legacyUploadDir, file);
+            const dest = path.join(uploadDir, file);
+            if (!fs.existsSync(dest) && fs.statSync(src).isFile()) {
+                fs.copyFileSync(src, dest);
+            }
+        }
+    } catch (e) {
+        // Migration completed or unneeded
+    }
+}
+
+// In-memory registry for private file permissions: filename -> { sender, target }
+const privateFilePermissions = new Map();
+
+// Configure Multer Storage with Cryptographic Safe Filenames
 const storage = multer.diskStorage({
-    destination: uploadDir,
+    destination: (req, file, cb) => {
+        cb(null, uploadDir);
+    },
     filename: (req, file, cb) => {
-        cb(null, Date.now() + '-' + file.originalname.replace(/\s+/g, '_'));
+        const ext = path.extname(file.originalname).toLowerCase();
+        const safeExt = ALLOWED_EXTENSIONS.has(ext) ? ext : '.bin';
+        const randomHex = crypto.randomBytes(12).toString('hex');
+        const safeName = `${Date.now()}-${randomHex}${safeExt}`;
+        cb(null, safeName);
     }
 });
-const upload = multer({ storage });
+
+const upload = multer({
+    storage,
+    limits: {
+        fileSize: 25 * 1024 * 1024, // 25 MB max
+        files: 10 // Max 10 files per request
+    },
+    fileFilter: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+
+        // Reject dangerous executable types immediately
+        if (DANGEROUS_EXTENSIONS.has(ext)) {
+            return cb(new Error('Rejected dangerous file type. Executables and scripts are prohibited.'));
+        }
+
+        // Validate allowed extension and MIME type
+        if (!ALLOWED_EXTENSIONS.has(ext) && !ALLOWED_MIME_TYPES.has(file.mimetype)) {
+            return cb(new Error('Unsupported file format. Supported: JPG, PNG, WEBP, GIF, PDF, DOCX, XLSX, PPTX, TXT, CSV.'));
+        }
+
+        cb(null, true);
+    }
+});
 
 // Password Hashing Helpers
 function hashPassword(password) {
@@ -50,27 +125,60 @@ function verifyPassword(password, storedHash) {
     return hash === originalHash;
 }
 
-// Helper to send group history
+// Helper to format Supabase message rows (reconstructs attachments from JSON payload if present)
+function formatMessageRow(row) {
+    let text = row.message;
+    let fileURL = null;
+    let fileName = null;
+    let fileSize = null;
+    let fileType = null;
+
+    if (typeof row.message === 'string' && row.message.trim().startsWith('{') && row.message.includes('"fileURL"')) {
+        try {
+            const parsed = JSON.parse(row.message);
+            text = parsed.text || '';
+            fileURL = parsed.fileURL || null;
+            fileName = parsed.fileName || null;
+            fileSize = parsed.fileSize || null;
+            fileType = parsed.fileType || null;
+        } catch (e) {
+            // Keep original row.message if not valid JSON
+        }
+    }
+
+    return {
+        user: row.sender,
+        target: row.target,
+        message: text,
+        type: row.type || 'group',
+        timestamp: row.created_at,
+        messageId: row.message_id || row.id,
+        fileURL,
+        fileName,
+        fileSize,
+        fileType,
+        profilePicture: 'profile.png'
+    };
+}
+
+// Helper to send group history (filtered to active retention window: <= 48 hours)
 async function sendRecentGroupHistory(socket) {
     try {
+        const retentionHours = getRetentionHours();
+        const cutoffDate = new Date(Date.now() - retentionHours * 60 * 60 * 1000).toISOString();
+
         const { data: history, error } = await supabase
             .from('messages')
             .select('*')
             .eq('type', 'group')
+            .gt('created_at', cutoffDate)
             .order('created_at', { ascending: true })
             .limit(100);
 
         if (error) {
             console.error('Error fetching group history from Supabase:', error.message);
         } else if (history) {
-            const formattedHistory = history.map(row => ({
-                user: row.sender,
-                message: row.message,
-                type: 'group',
-                timestamp: row.created_at,
-                messageId: row.message_id || row.id,
-                profilePicture: 'profile.png'
-            }));
+            const formattedHistory = history.map(formatMessageRow);
             socket.emit('loadGroupHistory', formattedHistory);
         }
     } catch (err) {
@@ -80,26 +188,119 @@ async function sendRecentGroupHistory(socket) {
 
 app.use(express.json());
 
-// Handle file uploads
-app.post('/upload', upload.single('file'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
-    }
-    const fileURL = `/uploads/${req.file.filename}`;
-    res.json({ fileURL, fileName: req.file.filename });
+// Multi-file Advanced Upload Endpoint
+app.post('/api/upload', (req, res) => {
+    upload.array('files', 10)(req, res, (err) => {
+        if (err) {
+            return res.status(400).json({ error: err.message || 'File upload failed.' });
+        }
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'No files provided.' });
+        }
+
+        const isPrivate = req.body.isPrivate === 'true';
+        const sender = (req.body.sender || '').trim();
+        const target = (req.body.target || '').trim();
+
+        const uploadedFiles = req.files.map((file) => {
+            // If private, record permissions for access authorization
+            if (isPrivate && target) {
+                privateFilePermissions.set(file.filename, { sender, target });
+            }
+
+            return {
+                fileURL: `/api/files/${file.filename}`,
+                fileName: file.originalname,
+                storedName: file.filename,
+                fileSize: file.size,
+                fileType: file.mimetype
+            };
+        });
+
+        res.json({ success: true, files: uploadedFiles });
+    });
 });
 
-app.post('/uploadProfilePic', upload.single('file'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
-    }
-    const fileURL = `/uploads/${req.file.filename}`;
-    res.json({ fileURL });
+// Single File Upload Endpoint (Backward-Compatible)
+app.post('/upload', (req, res) => {
+    upload.single('file')(req, res, (err) => {
+        if (err) {
+            return res.status(400).json({ error: err.message || 'File upload failed.' });
+        }
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded.' });
+        }
+
+        const isPrivate = req.body.isPrivate === 'true';
+        const sender = (req.body.sender || '').trim();
+        const target = (req.body.target || '').trim();
+
+        if (isPrivate && target) {
+            privateFilePermissions.set(req.file.filename, { sender, target });
+        }
+
+        res.json({
+            fileURL: `/api/files/${req.file.filename}`,
+            fileName: req.file.originalname,
+            storedName: req.file.filename,
+            fileSize: req.file.size,
+            fileType: req.file.mimetype
+        });
+    });
 });
 
-// Health check endpoint
+// Protected File Serving Handler (Access Verification & Path Traversal Prevention)
+function handleFileRequest(req, res) {
+    // Path traversal defense: strip any directory paths
+    const filename = path.basename(req.params.filename);
+    const filePath = path.join(uploadDir, filename);
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found.' });
+    }
+
+    // Access control: verify authorization for private conversation attachments
+    const permission = privateFilePermissions.get(filename);
+    if (permission) {
+        const requestingUser = (req.query.user || req.headers['x-talkspace-user'] || '').trim().toLowerCase();
+        const isAuthorized =
+            requestingUser &&
+            (requestingUser === permission.sender.toLowerCase() ||
+             requestingUser === permission.target.toLowerCase());
+
+        if (!isAuthorized) {
+            return res.status(403).json({ error: 'Forbidden. You do not have permission to access this private attachment.' });
+        }
+    }
+
+    // Serve protected file
+    res.sendFile(filePath);
+}
+
+app.get('/api/files/:filename', handleFileRequest);
+app.get('/uploads/:filename', handleFileRequest);
+
+// Health check & Retention status endpoint
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', supabaseConnected: !!process.env.SUPABASE_URL });
+    res.json({
+        status: 'ok',
+        supabaseConnected: !!process.env.SUPABASE_URL,
+        retentionPolicy: {
+            groupRetentionHours: getRetentionHours(),
+            privateRetention: 'lifetime'
+        }
+    });
+});
+
+app.get('/api/admin/retention/status', (req, res) => {
+    const hours = getRetentionHours();
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    res.json({
+        policy: '48-hour public group retention / lifetime private retention',
+        groupRetentionHours: hours,
+        currentCutoffUTC: cutoff,
+        timestamp: new Date().toISOString()
+    });
 });
 
 // Serve modern React frontend build if present
@@ -108,7 +309,7 @@ if (fs.existsSync(frontendDist)) {
     app.use(express.static(frontendDist));
 }
 
-// Serve public directory for uploads and legacy assets
+// Serve public directory for static assets
 app.use(express.static(path.join(__dirname, 'public')));
 
 // HTML Fallback for Single Page Application
@@ -216,27 +417,24 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Request group chat history
+    // Request group chat history (strictly filtered to within the 48-hour retention window)
     socket.on('requestGroupHistory', async () => {
         try {
+            const retentionHours = getRetentionHours();
+            const cutoffDate = new Date(Date.now() - retentionHours * 60 * 60 * 1000).toISOString();
+
             const { data: history, error } = await supabase
                 .from('messages')
                 .select('*')
                 .eq('type', 'group')
+                .gt('created_at', cutoffDate)
                 .order('created_at', { ascending: true })
                 .limit(100);
 
             if (error) {
                 console.error('Error fetching group history:', error.message);
             } else if (history) {
-                const formattedHistory = history.map(row => ({
-                    user: row.sender,
-                    message: row.message,
-                    type: 'group',
-                    timestamp: row.created_at,
-                    messageId: row.message_id || row.id,
-                    profilePicture: 'profile.png'
-                }));
+                const formattedHistory = history.map(formatMessageRow);
                 socket.emit('loadGroupHistory', formattedHistory);
             }
         } catch (err) {
@@ -261,15 +459,7 @@ io.on('connection', (socket) => {
             if (error) {
                 console.error('Error fetching private history:', error.message);
             } else if (history) {
-                const formattedHistory = history.map(row => ({
-                    user: row.sender,
-                    target: row.target,
-                    message: row.message,
-                    type: 'private',
-                    timestamp: row.created_at,
-                    messageId: row.message_id || row.id,
-                    profilePicture: 'profile.png'
-                }));
+                const formattedHistory = history.map(formatMessageRow);
                 socket.emit('loadPrivateHistory', { partner, history: formattedHistory });
             }
         } catch (err) {
@@ -277,7 +467,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle group messages
+    // Handle group messages (text or file attachment)
     socket.on('groupMessage', async (msg) => {
         const sender = users.get(socket.id)?.username;
         if (sender === msg.user && !sentMessageIds.has(msg.messageId)) {
@@ -291,8 +481,21 @@ io.on('connection', (socket) => {
                 messageId: msg.messageId,
                 fileURL: msg.fileURL || null,
                 fileName: msg.fileName || null,
+                fileSize: msg.fileSize || null,
+                fileType: msg.fileType || null,
                 profilePicture: msg.profilePicture || 'profile.png',
             };
+
+            // Reconstruct JSON payload if message contains an attachment for clean Supabase storage
+            const messageToSave = msg.fileURL
+                ? JSON.stringify({
+                    text: msg.message || '',
+                    fileURL: msg.fileURL,
+                    fileName: msg.fileName,
+                    fileSize: msg.fileSize,
+                    fileType: msg.fileType
+                })
+                : (msg.message || '');
 
             try {
                 await supabase
@@ -302,7 +505,7 @@ io.on('connection', (socket) => {
                         sender: msg.user,
                         target: null,
                         type: 'group',
-                        message: msg.message || ''
+                        message: messageToSave
                     }]);
             } catch (err) {
                 console.error('Supabase insert error:', err);
@@ -312,7 +515,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle private messages
+    // Handle private messages (text or file attachment)
     socket.on('privateMessage', async (msg) => {
         const sender = users.get(socket.id)?.username;
         if (!sentMessageIds.has(msg.messageId) && sender) {
@@ -328,8 +531,20 @@ io.on('connection', (socket) => {
                 messageId: msg.messageId,
                 fileURL: msg.fileURL || null,
                 fileName: msg.fileName || null,
+                fileSize: msg.fileSize || null,
+                fileType: msg.fileType || null,
                 profilePicture: msg.profilePicture || 'profile.png',
             };
+
+            const messageToSave = msg.fileURL
+                ? JSON.stringify({
+                    text: msg.message || '',
+                    fileURL: msg.fileURL,
+                    fileName: msg.fileName,
+                    fileSize: msg.fileSize,
+                    fileType: msg.fileType
+                })
+                : (msg.message || '');
 
             try {
                 await supabase
@@ -339,7 +554,7 @@ io.on('connection', (socket) => {
                         sender: msg.user,
                         target: msg.target,
                         type: 'private',
-                        message: msg.message || ''
+                        message: messageToSave
                     }]);
             } catch (err) {
                 console.error('Supabase insert error:', err);
@@ -414,4 +629,7 @@ io.on('connection', (socket) => {
 server.listen(PORT, () => {
     console.log(`🚀 TalkSpace server running directly on port ${PORT}`);
     console.log(`📡 Supabase database: ${process.env.SUPABASE_URL ? 'Connected' : 'Missing credentials in .env'}`);
+    
+    // Start automated hourly message retention and attachment cleanup scheduler
+    startRetentionScheduler(io, uploadDir);
 });
