@@ -1,51 +1,57 @@
 import React, { useState } from 'react';
 import { Navbar } from '@/components/landing/Navbar';
 import { Hero } from '@/components/landing/Hero';
-import { Highlights } from '@/components/landing/Highlights';
 import { Features } from '@/components/landing/Features';
-import { ProductShowcase } from '@/components/landing/ProductShowcase';
 import { WhyTalkSpace } from '@/components/landing/WhyTalkSpace';
-import { Faq } from '@/components/landing/Faq';
 import { FinalCta } from '@/components/landing/FinalCta';
 import { Footer } from '@/components/landing/Footer';
 import { AuthModal } from '@/components/auth/AuthModal';
 
-export function LandingPage({ onEnterApp }) {
-  const [authMode, setAuthMode] = useState(null); // 'login' | 'register' | null
+export function LandingPage({ onEnterChat, onOpenAuth }) {
+  const [authModalMode, setAuthModalMode] = useState(null); // optional fallback modal
 
-  const handleOpenAuth = (mode = 'login') => {
-    setAuthMode(mode);
-  };
-
-  const handleCloseAuth = () => {
-    setAuthMode(null);
+  const handleOpenAuth = (mode) => {
+    if (onOpenAuth) {
+      onOpenAuth(mode);
+    } else {
+      setAuthModalMode(mode);
+    }
   };
 
   return (
     <div className="min-h-screen bg-background text-foreground overflow-x-hidden flex flex-col font-sans antialiased">
-      {/* Sticky Navigation Bar */}
-      <Navbar onOpenAuth={handleOpenAuth} />
+      {/* Navigation */}
+      <Navbar
+        onOpenAuth={handleOpenAuth}
+        onEnterChat={onEnterChat}
+      />
 
-      {/* Main Page Content */}
+      {/* Main Landing Sections */}
       <main className="flex-1">
-        <Hero onOpenAuth={handleOpenAuth} />
-        <Highlights />
+        <Hero
+          onOpenAuth={handleOpenAuth}
+          onEnterChat={onEnterChat}
+        />
         <Features />
-        <ProductShowcase onOpenAuth={handleOpenAuth} />
         <WhyTalkSpace />
-        <Faq />
-        <FinalCta onOpenAuth={handleOpenAuth} />
+        <FinalCta
+          onOpenAuth={handleOpenAuth}
+          onEnterChat={onEnterChat}
+        />
       </main>
 
       {/* Footer */}
       <Footer onOpenAuth={handleOpenAuth} />
 
-      {/* Auth Modal Popup if open */}
-      {authMode && (
+      {/* Auth Modal Overlay fallback if onOpenAuth is not used */}
+      {authModalMode && (
         <AuthModal
-          initialMode={authMode}
-          onClose={handleCloseAuth}
-          onSuccess={onEnterApp}
+          initialMode={authModalMode}
+          onClose={() => setAuthModalMode(null)}
+          onSuccess={() => {
+            setAuthModalMode(null);
+            onEnterChat();
+          }}
         />
       )}
     </div>
@@ -53,3 +59,4 @@ export function LandingPage({ onEnterApp }) {
 }
 
 export default LandingPage;
+

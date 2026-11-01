@@ -1,104 +1,96 @@
 import React from 'react';
-import {
-  Zap,
-  Lock,
-  Users,
-  Paperclip,
-  Activity,
-  Bell,
-  MessageCircle,
-  UserCheck,
-  Sparkles,
-} from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/Card';
+import { motion } from 'framer-motion';
+import { Zap, Lock, Users, Paperclip, Activity, ShieldCheck, Sparkles } from 'lucide-react';
+import { Card } from '@/components/ui/Card';
 
 export function Features() {
   const features = [
     {
       icon: Zap,
       title: 'Real-Time Messaging',
-      desc: 'Instant conversations with responsive message delivery powered by persistent WebSocket channels.',
+      description:
+        'Deliver messages instantaneously using optimized Socket.IO WebSockets with sub-millisecond response latency.',
     },
     {
       icon: Lock,
       title: 'Private Conversations',
-      desc: 'Dedicated one-to-one messaging with direct invite requests and isolated conversation histories.',
+      description:
+        'Send 1-on-1 direct messages with isolated history channels and a dedicated request approval workflow.',
     },
     {
       icon: Users,
-      title: 'Group Chats',
-      desc: 'Bring multiple people together in community channels designed for team collaboration.',
+      title: 'Group Discussions',
+      description:
+        'Bring everyone into public community channels like #general where all connected members collaborate live.',
     },
     {
       icon: Paperclip,
-      title: 'File Sharing',
-      desc: 'Share documents, images, and other supported files directly into the conversation stream.',
+      title: 'Media Sharing',
+      description:
+        'Upload images with inline lightboxes and attach documents with one-click direct download cards.',
     },
     {
       icon: Activity,
       title: 'Online Presence',
-      desc: 'See which users are currently active in your space with real-time status indicators.',
+      description:
+        'Stay informed about who is currently available with real-time green presence indicator dots and online counts.',
     },
     {
-      icon: Bell,
-      title: 'Smart Notifications',
-      desc: 'Stay informed about new messages and incoming chat invitations with toast alerts and subtle audio.',
-    },
-    {
-      icon: MessageCircle,
-      title: 'Typing Indicators',
-      desc: 'Know when someone is actively composing a message to keep conversations natural and in sync.',
-    },
-    {
-      icon: UserCheck,
-      title: 'Simple Connections',
-      desc: 'Manage your active directory, send chat invitations, and approve or decline incoming requests.',
+      icon: ShieldCheck,
+      title: 'Secure Communication',
+      description:
+        'Encrypted credentials with salted cryptographic PBKDF2 SHA-512 hashes and Supabase Row-Level Security.',
     },
   ];
 
   return (
-    <section id="features" className="py-24 relative select-none">
-      <div className="container max-w-7xl mx-auto px-4 sm:px-8 space-y-16">
+    <section id="features" className="py-20 md:py-28 relative select-none bg-muted/20 border-t border-border/60">
+      <div className="container max-w-7xl mx-auto px-4 sm:px-8 space-y-14">
         {/* Section Header */}
         <div className="text-center space-y-3 max-w-2xl mx-auto">
           <div className="inline-flex items-center gap-1.5 text-xs font-bold text-primary uppercase tracking-wider">
-            <Sparkles className="w-3.5 h-3.5" /> Capabilities
+            <Sparkles className="w-3.5 h-3.5" /> Core Capabilities
           </div>
           <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-foreground">
-            Everything you need to stay connected.
+            Everything you need to communicate clearly.
           </h2>
           <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-            Engineered with a focus on speed, reliability, and human connection. No clutter — just real-time dialogue.
+            Designed to remove friction from digital conversations. Focus purely on the message.
           </p>
         </div>
 
-        {/* 8 Feature Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* 6 Feature Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {features.map((feature, index) => {
             const Icon = feature.icon;
             return (
-              <Card
+              <motion.div
                 key={index}
-                className="group p-6 hover:border-primary/50 transition-all duration-300 hover:shadow-glow hover:-translate-y-1 bg-card/80 backdrop-blur-sm flex flex-col justify-between"
+                initial={{ opacity: 0, y: 15 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.4, delay: index * 0.08 }}
               >
-                <div className="space-y-4">
-                  <div className="w-12 h-12 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center group-hover:scale-110 group-hover:bg-primary group-hover:text-white transition-all duration-300 shadow-subtle">
-                    <Icon className="w-6 h-6" />
+                <Card className="p-6 h-full border border-border/80 bg-card hover:border-primary/50 hover:shadow-glow transition-all duration-300 flex flex-col justify-between">
+                  <div className="space-y-4">
+                    <div className="w-11 h-11 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center">
+                      <Icon className="w-5 h-5" />
+                    </div>
+
+                    <h3 className="font-bold text-base text-foreground">
+                      {feature.title}
+                    </h3>
+
+                    <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
+                      {feature.description}
+                    </p>
                   </div>
 
-                  <h3 className="font-bold text-base text-foreground group-hover:text-primary transition-colors">
-                    {feature.title}
-                  </h3>
-
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    {feature.desc}
-                  </p>
-                </div>
-
-                <div className="pt-4 mt-4 border-t border-border/40 flex items-center text-[11px] font-semibold text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                  Active feature &bull; Realtime enabled
-                </div>
-              </Card>
+                  <div className="pt-4 mt-4 border-t border-border/40 text-[11px] font-semibold text-primary">
+                    Instant &bull; Cloud Connected
+                  </div>
+                </Card>
+              </motion.div>
             );
           })}
         </div>
@@ -108,3 +100,4 @@ export function Features() {
 }
 
 export default Features;
+

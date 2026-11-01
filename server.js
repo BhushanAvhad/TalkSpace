@@ -3,16 +3,38 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
+const multer = require('multer');
 const supabase = require('./supabaseClient');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST'],
+    },
+});
 
 const PORT = process.env.PORT || 3000;
 const users = new Map(); // Store users as { socketId → { username, profileImage } }
 const sentMessageIds = new Set(); // Store sent message IDs to prevent duplicates
+
+// Create 'uploads' folder if it doesn't exist
+const uploadDir = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configure Multer for file uploads
+const storage = multer.diskStorage({
+    destination: uploadDir,
+    filename: (req, file, cb) => {
+        cb(null, Date.now() + '-' + file.originalname.replace(/\s+/g, '_'));
+    }
+});
+const upload = multer({ storage });
 
 // Password Hashing Helpers
 function hashPassword(password) {
@@ -57,16 +79,48 @@ async function sendRecentGroupHistory(socket) {
 }
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
-// Serve HTML
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Handle file uploads
+app.post('/upload', upload.single('file'), (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+    }
+    const fileURL = `/uploads/${req.file.filename}`;
+    res.json({ fileURL, fileName: req.file.filename });
+});
+
+app.post('/uploadProfilePic', upload.single('file'), (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+    }
+    const fileURL = `/uploads/${req.file.filename}`;
+    res.json({ fileURL });
 });
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', supabaseConnected: !!process.env.SUPABASE_URL });
+});
+
+// Serve modern React frontend build if present
+const frontendDist = path.join(__dirname, 'frontend', 'dist');
+if (fs.existsSync(frontendDist)) {
+    app.use(express.static(frontendDist));
+}
+
+// Serve public directory for uploads and legacy assets
+app.use(express.static(path.join(__dirname, 'public')));
+
+// HTML Fallback for Single Page Application
+app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/upload') || req.path.startsWith('/socket.io')) {
+        return next();
+    }
+    const modernIndex = path.join(__dirname, 'frontend', 'dist', 'index.html');
+    if (fs.existsSync(modernIndex)) {
+        return res.sendFile(modernIndex);
+    }
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Handle WebSocket connections
@@ -87,7 +141,6 @@ io.on('connection', (socket) => {
         }
 
         try {
-            // Check if user already exists
             const { data: existingUser, error: checkError } = await supabase
                 .from('users')
                 .select('id')
@@ -103,7 +156,6 @@ io.on('connection', (socket) => {
                 return socket.emit('authResult', { success: false, message: 'Username already taken. Please choose another.' });
             }
 
-            // Hash password and insert
             const password_hash = hashPassword(password);
             const { error: insertError } = await supabase
                 .from('users')
@@ -114,7 +166,6 @@ io.on('connection', (socket) => {
                 return socket.emit('authResult', { success: false, message: 'Registration failed: ' + insertError.message });
             }
 
-            // Successfully registered & auto-login
             users.set(socket.id, { username: cleanUsername, profileImage: 'profile.png' });
             socket.emit('authResult', { success: true, username: cleanUsername });
             io.emit('updateUsers', Array.from(users.values()).map(u => u.username));
@@ -134,7 +185,6 @@ io.on('connection', (socket) => {
         const cleanUsername = username.trim();
 
         try {
-            // Fetch user from Supabase
             const { data: userRecord, error: fetchError } = await supabase
                 .from('users')
                 .select('*')
@@ -147,16 +197,14 @@ io.on('connection', (socket) => {
             }
 
             if (!userRecord) {
-                return socket.emit('authResult', { success: false, message: 'User not found. Please click Sign Up to register.' });
+                return socket.emit('authResult', { success: false, message: 'User not found. Please click Create Account to register.' });
             }
 
-            // Verify password
             const isValid = verifyPassword(password, userRecord.password_hash);
             if (!isValid) {
                 return socket.emit('authResult', { success: false, message: 'Incorrect password.' });
             }
 
-            // Successfully logged in
             users.set(socket.id, { username: userRecord.username, profileImage: 'profile.png' });
             socket.emit('authResult', { success: true, username: userRecord.username });
             io.emit('updateUsers', Array.from(users.values()).map(u => u.username));
@@ -241,12 +289,13 @@ io.on('connection', (socket) => {
                 type: 'group',
                 timestamp: new Date().toISOString(),
                 messageId: msg.messageId,
+                fileURL: msg.fileURL || null,
+                fileName: msg.fileName || null,
                 profilePicture: msg.profilePicture || 'profile.png',
             };
 
-            // Insert message into Supabase
             try {
-                const { error } = await supabase
+                await supabase
                     .from('messages')
                     .insert([{
                         message_id: msg.messageId,
@@ -255,17 +304,10 @@ io.on('connection', (socket) => {
                         type: 'group',
                         message: msg.message || ''
                     }]);
-
-                if (error) {
-                    console.error('Error saving message to Supabase:', error.message);
-                } else {
-                    console.log('Group message saved to Supabase');
-                }
             } catch (err) {
                 console.error('Supabase insert error:', err);
             }
 
-            // Broadcast to all clients except the sender
             socket.broadcast.emit('message', messageData);
         }
     });
@@ -284,12 +326,13 @@ io.on('connection', (socket) => {
                 type: 'private',
                 timestamp: new Date().toISOString(),
                 messageId: msg.messageId,
+                fileURL: msg.fileURL || null,
+                fileName: msg.fileName || null,
                 profilePicture: msg.profilePicture || 'profile.png',
             };
 
-            // Insert private message into Supabase
             try {
-                const { error } = await supabase
+                await supabase
                     .from('messages')
                     .insert([{
                         message_id: msg.messageId,
@@ -298,22 +341,14 @@ io.on('connection', (socket) => {
                         type: 'private',
                         message: msg.message || ''
                     }]);
-
-                if (error) {
-                    console.error('Error saving private message to Supabase:', error.message);
-                } else {
-                    console.log('Private message saved to Supabase');
-                }
             } catch (err) {
                 console.error('Supabase insert error:', err);
             }
 
-            // Send to recipient if online
             if (targetEntry) {
                 const [targetSocketId] = targetEntry;
                 io.to(targetSocketId).emit('message', messageData);
             }
-            // Send back to sender
             socket.emit('message', messageData);
         }
     });
@@ -362,7 +397,6 @@ io.on('connection', (socket) => {
             const user = users.get(socket.id);
             users.delete(socket.id);
 
-            // Notify users
             io.emit('message', {
                 user: 'System',
                 message: `${user.username} has left the chat`,
@@ -371,7 +405,6 @@ io.on('connection', (socket) => {
                 profilePicture: 'profile.png',
             });
 
-            // Update active users list
             io.emit('updateUsers', Array.from(users.values()).map(u => u.username));
         }
     });
@@ -379,6 +412,6 @@ io.on('connection', (socket) => {
 
 // Start the server
 server.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📡 Supabase database configured: ${process.env.SUPABASE_URL ? 'Connected' : 'Missing credentials in .env'}`);
+    console.log(`🚀 TalkSpace server running directly on port ${PORT}`);
+    console.log(`📡 Supabase database: ${process.env.SUPABASE_URL ? 'Connected' : 'Missing credentials in .env'}`);
 });

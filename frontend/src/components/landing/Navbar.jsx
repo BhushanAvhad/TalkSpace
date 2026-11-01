@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, X, ArrowRight, Sparkles } from 'lucide-react';
+import { Menu, X, ArrowRight, MessageSquare } from 'lucide-react';
 import { Logo } from '@/components/brand/Logo';
 import { Button } from '@/components/ui/Button';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { cn } from '@/lib/utils';
 
-export function Navbar({ onOpenAuth }) {
+export function Navbar({ onOpenAuth, onEnterChat }) {
+  const { isAuthenticated, user } = useAuthStore();
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState('home');
@@ -14,8 +16,8 @@ export function Navbar({ onOpenAuth }) {
     const handleScroll = () => {
       setScrolled(window.scrollY > 20);
 
-      const sections = ['home', 'features', 'product', 'why-us', 'faq'];
-      const scrollPosition = window.scrollY + 100;
+      const sections = ['home', 'features', 'about', 'why-us'];
+      const scrollPosition = window.scrollY + 120;
 
       for (const sectionId of sections) {
         const el = document.getElementById(sectionId);
@@ -45,28 +47,30 @@ export function Navbar({ onOpenAuth }) {
   const navLinks = [
     { label: 'Home', id: 'home' },
     { label: 'Features', id: 'features' },
-    { label: 'Showcase', id: 'product' },
+    { label: 'About', id: 'about' },
     { label: 'Why TalkSpace', id: 'why-us' },
-    { label: 'FAQ', id: 'faq' },
   ];
 
   return (
-    <nav
+    <header
       className={cn(
-        'fixed top-0 left-0 right-0 z-50 transition-all duration-300',
+        'fixed top-0 left-0 right-0 z-50 transition-all duration-200 select-none',
         scrolled
-          ? 'bg-background/85 backdrop-blur-md border-b border-border shadow-subtle'
+          ? 'bg-background/90 backdrop-blur-md border-b border-border/80 shadow-subtle'
           : 'bg-transparent border-b border-transparent'
       )}
     >
-      <div className="container max-w-7xl mx-auto px-4 sm:px-8 h-20 flex items-center justify-between">
-        {/* Left: Brand Logo */}
-        <div className="cursor-pointer" onClick={() => scrollToSection('home')}>
+      <div className="container max-w-7xl mx-auto px-4 sm:px-8 h-18 flex items-center justify-between">
+        {/* Left: Original TalkSpace custom logo */}
+        <div
+          className="cursor-pointer flex items-center"
+          onClick={() => scrollToSection('home')}
+        >
           <Logo variant="full" size="md" showTagline={false} />
         </div>
 
-        {/* Center: Desktop Navigation Links */}
-        <div className="hidden md:flex items-center gap-1 p-1.5 rounded-full bg-card/60 border border-border/80 backdrop-blur-sm shadow-subtle">
+        {/* Center: Navigation Links (Home, Features, About) */}
+        <nav className="hidden md:flex items-center gap-1 px-3 py-1.5 rounded-full bg-card/60 border border-border/60 backdrop-blur-sm shadow-subtle">
           {navLinks.map((link) => {
             const isActive = activeSection === link.id;
             return (
@@ -75,7 +79,7 @@ export function Navbar({ onOpenAuth }) {
                 type="button"
                 onClick={() => scrollToSection(link.id)}
                 className={cn(
-                  'px-4 py-1.5 text-xs font-semibold rounded-full transition-all duration-200 select-none',
+                  'px-4 py-1.5 text-xs font-semibold rounded-full transition-all duration-200',
                   isActive
                     ? 'bg-primary text-primary-foreground shadow-glow'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
@@ -85,28 +89,44 @@ export function Navbar({ onOpenAuth }) {
               </button>
             );
           })}
-        </div>
+        </nav>
 
-        {/* Right: Theme Toggle & Auth Buttons */}
+        {/* Right: Theme Toggle & Actions */}
         <div className="hidden md:flex items-center gap-3">
           <ThemeToggle />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onOpenAuth('login')}
-            className="text-xs font-semibold"
-          >
-            Sign In
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => onOpenAuth('register')}
-            className="text-xs font-semibold shadow-glow"
-          >
-            Get Started
-            <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
-          </Button>
+
+          {isAuthenticated ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={onEnterChat}
+              className="text-xs font-semibold shadow-glow"
+            >
+              <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+              Open Chat (@{user?.username})
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onOpenAuth('login')}
+                className="text-xs font-semibold text-foreground hover:text-primary"
+              >
+                Login
+              </Button>
+
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => onOpenAuth('register')}
+                className="text-xs font-semibold shadow-glow"
+              >
+                Get Started
+                <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+              </Button>
+            </>
+          )}
         </div>
 
         {/* Mobile Hamburger Button */}
@@ -123,9 +143,9 @@ export function Navbar({ onOpenAuth }) {
         </div>
       </div>
 
-      {/* Mobile Slide-down Drawer */}
+      {/* Mobile Menu Drawer */}
       {mobileMenuOpen && (
-        <div className="md:hidden border-b border-border bg-card/95 backdrop-blur-xl px-4 py-6 space-y-4 animate-fade-in shadow-xl">
+        <div className="md:hidden border-b border-border bg-card/95 backdrop-blur-xl px-5 py-6 space-y-4 shadow-2xl animate-fade-in">
           <div className="flex flex-col space-y-2">
             {navLinks.map((link) => (
               <button
@@ -145,33 +165,50 @@ export function Navbar({ onOpenAuth }) {
           </div>
 
           <div className="pt-4 border-t border-border flex flex-col gap-2.5">
-            <Button
-              variant="outline"
-              size="default"
-              className="w-full text-xs font-semibold"
-              onClick={() => {
-                setMobileMenuOpen(false);
-                onOpenAuth('login');
-              }}
-            >
-              Sign In
-            </Button>
-            <Button
-              variant="primary"
-              size="default"
-              className="w-full text-xs font-semibold"
-              onClick={() => {
-                setMobileMenuOpen(false);
-                onOpenAuth('register');
-              }}
-            >
-              Get Started
-            </Button>
+            {isAuthenticated ? (
+              <Button
+                variant="primary"
+                size="default"
+                className="w-full text-xs font-semibold"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onEnterChat();
+                }}
+              >
+                Open Workspace (@{user?.username})
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  size="default"
+                  className="w-full text-xs font-semibold"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenAuth('login');
+                  }}
+                >
+                  Login
+                </Button>
+                <Button
+                  variant="primary"
+                  size="default"
+                  className="w-full text-xs font-semibold"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenAuth('register');
+                  }}
+                >
+                  Get Started
+                </Button>
+              </>
+            )}
           </div>
         </div>
       )}
-    </nav>
+    </header>
   );
 }
 
 export default Navbar;
+

@@ -4,7 +4,11 @@ import socket from '@/socket/socket';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useChatStore } from '@/stores/useChatStore';
 import { LandingPage } from '@/pages/LandingPage';
-import { ChatAppPage } from '@/pages/ChatAppPage';
+import { AuthPage } from '@/components/auth/AuthPage';
+import { Sidebar } from '@/components/chat/Sidebar';
+import { ChatHeader } from '@/components/chat/ChatHeader';
+import { MessageList } from '@/components/chat/MessageList';
+import { MessageInput } from '@/components/chat/MessageInput';
 
 export function App() {
   const { user, isAuthenticated, setUser, setAuthError } = useAuthStore();
@@ -18,9 +22,10 @@ export function App() {
     setCurrentChat,
   } = useChatStore();
 
-  // Control whether viewing the Landing Page or Live Chat App
-  // Default to landing page first
-  const [currentView, setCurrentView] = useState('landing'); // 'landing' | 'app'
+  // 'landing' | 'auth' | 'chat'
+  const [currentView, setCurrentView] = useState('landing');
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Global Socket.IO event listeners
   useEffect(() => {
@@ -32,7 +37,7 @@ export function App() {
       if (result.success) {
         setUser({ username: result.username });
         toast.success(`Welcome to TalkSpace, @${result.username}!`);
-        setCurrentView('app'); // Navigate into the live chat app on successful login
+        setCurrentView('chat');
       } else {
         setAuthError(result.message || 'Authentication failed');
         toast.error(result.message || 'Authentication failed');
@@ -100,10 +105,17 @@ export function App() {
     };
   }, [user?.username]);
 
-  // Request group history when entering the app
+  // Request group history when user enters the chat view
   useEffect(() => {
-    if (isAuthenticated && socket.connected && currentView === 'app') {
+    if (isAuthenticated && socket.connected && currentView === 'chat') {
       socket.emit('requestGroupHistory');
+    }
+  }, [isAuthenticated, currentView]);
+
+  // Guard chat view against unauthenticated access
+  useEffect(() => {
+    if (!isAuthenticated && currentView === 'chat') {
+      setCurrentView('landing');
     }
   }, [isAuthenticated, currentView]);
 
@@ -112,10 +124,60 @@ export function App() {
       <Toaster position="top-right" richColors />
 
       {currentView === 'landing' ? (
-        <LandingPage onEnterApp={() => setCurrentView('app')} />
-      ) : (
-        <ChatAppPage onBackToHome={() => setCurrentView('landing')} />
-      )}
+        <LandingPage
+          onEnterChat={() => {
+            if (isAuthenticated) {
+              setCurrentView('chat');
+            } else {
+              setAuthMode('login');
+              setCurrentView('auth');
+            }
+          }}
+          onOpenAuth={(mode) => {
+            setAuthMode(mode);
+            setCurrentView('auth');
+          }}
+        />
+      ) : currentView === 'auth' ? (
+        <AuthPage
+          initialMode={authMode}
+          onBackToHome={() => setCurrentView('landing')}
+          onSuccess={() => setCurrentView('chat')}
+        />
+      ) : isAuthenticated ? (
+        <div className="h-screen w-screen flex overflow-hidden bg-background text-foreground font-sans antialiased">
+          {/* Desktop Persistent Sidebar */}
+          <div className="hidden md:block h-full">
+            <Sidebar onBackToHome={() => setCurrentView('landing')} />
+          </div>
+
+          {/* Mobile Slide-Over Drawer */}
+          {mobileSidebarOpen && (
+            <div className="fixed inset-0 z-50 md:hidden flex">
+              <div
+                className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={() => setMobileSidebarOpen(false)}
+              />
+              <div className="relative z-10 w-80 h-full bg-sidebar shadow-2xl">
+                <Sidebar
+                  onCloseMobile={() => setMobileSidebarOpen(false)}
+                  onBackToHome={() => {
+                    setMobileSidebarOpen(false);
+                    setCurrentView('landing');
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Main Realtime Chat Viewport */}
+          <main className="flex-1 flex flex-col h-full overflow-hidden bg-background">
+            <ChatHeader onOpenMobileSidebar={() => setMobileSidebarOpen(true)} />
+            <MessageList />
+            <MessageInput />
+          </main>
+        </div>
+      ) : null}
     </>
   );
 }

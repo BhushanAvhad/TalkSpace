@@ -1,7 +1,7 @@
 import { io } from 'socket.io-client';
 
-// Use same host via Vite proxy in development, or fallback to window.location.origin
-const SOCKET_URL = window.location.port === '5173' ? 'http://localhost:3000' : window.location.origin;
+// Connect directly to the unified server on port 3000
+const SOCKET_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
 
 export const socket = io(SOCKET_URL, {
   autoConnect: false,
@@ -12,4 +12,3 @@ export const socket = io(SOCKET_URL, {
 });
 
 export default socket;
-

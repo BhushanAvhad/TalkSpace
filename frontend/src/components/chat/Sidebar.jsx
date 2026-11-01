@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Shield,
   Circle,
+  Home,
 } from 'lucide-react';
 import { Logo } from '@/components/brand/Logo';
 import { Avatar } from '@/components/ui/Avatar';
@@ -22,7 +23,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useChatStore } from '@/stores/useChatStore';
 import { cn } from '@/lib/utils';
 
-export function Sidebar({ className, onCloseMobile }) {
+export function Sidebar({ className, onCloseMobile, onBackToHome }) {
   const { user, logout } = useAuthStore();
   const {
     currentChat,
@@ -59,7 +60,20 @@ export function Sidebar({ className, onCloseMobile }) {
       {/* Top Brand Header */}
       <div className="h-16 flex items-center justify-between px-4 border-b border-sidebar-border/60">
         <Logo variant="full" size="sm" />
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          {onBackToHome && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onBackToHome}
+              title="Return to Landing Page"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Home className="w-4 h-4" />
+            </Button>
+          )}
+          <ThemeToggle />
+        </div>
       </div>
 
       {/* User Search */}
@@ -213,7 +227,6 @@ export function Sidebar({ className, onCloseMobile }) {
                     </div>
                   </div>
 
-                  {/* Send chat request button */}
                   {!isSelected && (
                     <Button
                       size="icon-sm"
@@ -265,4 +278,3 @@ export function Sidebar({ className, onCloseMobile }) {
 }
 
 export default Sidebar;
-

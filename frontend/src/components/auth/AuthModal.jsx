@@ -1,80 +1,64 @@
 import React, { useState, useEffect } from 'react';
-import { User, Lock, ArrowRight, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { X, ShieldCheck } from 'lucide-react';
 import { Logo } from '@/components/brand/Logo';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { useAuthStore } from '@/stores/useAuthStore';
+import { LoginForm } from './LoginForm';
+import { RegisterForm } from './RegisterForm';
 
 export function AuthModal({ initialMode = 'login', onClose, onSuccess }) {
-  const [isRegister, setIsRegister] = useState(initialMode === 'register');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const { login, register, isLoading, authError, isAuthenticated } = useAuthStore();
+  const [mode, setMode] = useState(initialMode); // 'login' | 'register'
 
   useEffect(() => {
-    setIsRegister(initialMode === 'register');
+    setMode(initialMode);
   }, [initialMode]);
 
-  useEffect(() => {
-    if (isAuthenticated && onSuccess) {
-      onSuccess();
-    }
-  }, [isAuthenticated, onSuccess]);
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!username.trim() || !password.trim()) return;
-
-    if (isRegister) {
-      register(username.trim(), password.trim());
-    } else {
-      login(username.trim(), password.trim());
-    }
-  };
+  const isLogin = mode === 'login';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-xl animate-fade-in">
       {/* Click backdrop to close */}
       <div className="fixed inset-0" onClick={onClose} />
 
-      <div className="w-full max-w-md p-8 rounded-3xl border border-border bg-card/95 text-card-foreground shadow-glow-lg transition-all relative overflow-hidden z-10">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.96 }}
+        transition={{ duration: 0.2 }}
+        className="w-full max-w-md p-6 sm:p-8 rounded-3xl border border-border/80 bg-card/95 text-card-foreground shadow-2xl relative overflow-hidden z-10"
+      >
         {/* Close Button */}
         {onClose && (
           <button
             type="button"
             onClick={onClose}
             className="absolute top-5 right-5 p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-            aria-label="Close modal"
+            aria-label="Close authentication modal"
           >
             <X className="w-4 h-4" />
           </button>
         )}
 
-        {/* Subtle decorative gradient aura */}
-        <div className="absolute -top-24 -right-24 w-48 h-48 bg-primary/20 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-purple-500/20 rounded-full blur-3xl pointer-events-none" />
-
         {/* Brand Header */}
-        <div className="flex flex-col items-center text-center mb-6 space-y-2">
-          <Logo variant="full" size="lg" showTagline={true} />
-          <h2 className="text-xl font-bold tracking-tight text-foreground mt-4">
-            {isRegister ? 'Create your TalkSpace account' : 'Welcome back to TalkSpace'}
+        <div className="flex flex-col items-center text-center space-y-2 mb-6">
+          <Logo variant="full" size="lg" showTagline={false} />
+          <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-foreground pt-2">
+            {isLogin ? 'Welcome back' : 'Create your account'}
           </h2>
-          <p className="text-xs text-muted-foreground">
-            {isRegister
-              ? 'Enter your details to join the live workspace'
-              : 'Sign in to access your direct chats and channels'}
+          <p className="text-xs text-muted-foreground max-w-xs">
+            {isLogin
+              ? 'Enter your credentials to access your conversations'
+              : 'Join TalkSpace to connect with friends and communities'}
           </p>
         </div>
 
         {/* Tab Toggle */}
-        <div className="grid grid-cols-2 p-1 mb-6 rounded-xl bg-muted/80 border border-border/80 text-xs font-semibold">
+        <div className="grid grid-cols-2 p-1 mb-6 rounded-xl bg-muted/60 border border-border/60 text-xs font-semibold">
           <button
             type="button"
-            onClick={() => setIsRegister(false)}
+            onClick={() => setMode('login')}
             className={`py-2 rounded-lg transition-all ${
-              !isRegister
-                ? 'bg-card text-foreground shadow-subtle'
+              isLogin
+                ? 'bg-card text-foreground shadow-subtle font-bold'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -82,10 +66,10 @@ export function AuthModal({ initialMode = 'login', onClose, onSuccess }) {
           </button>
           <button
             type="button"
-            onClick={() => setIsRegister(true)}
+            onClick={() => setMode('register')}
             className={`py-2 rounded-lg transition-all ${
-              isRegister
-                ? 'bg-card text-foreground shadow-subtle'
+              !isLogin
+                ? 'bg-card text-foreground shadow-subtle font-bold'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -93,56 +77,27 @@ export function AuthModal({ initialMode = 'login', onClose, onSuccess }) {
           </button>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-foreground">Username</label>
-            <Input
-              type="text"
-              placeholder="e.g. alex_rivers"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              icon={<User className="w-4 h-4" />}
-              autoComplete="username"
-              required
+        {/* Forms with AnimatePresence */}
+        <AnimatePresence mode="wait">
+          {isLogin ? (
+            <LoginForm
+              key="login"
+              onSwitchToRegister={() => setMode('register')}
             />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-foreground">Password</label>
-            <Input
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              icon={<Lock className="w-4 h-4" />}
-              autoComplete={isRegister ? 'new-password' : 'current-password'}
-              required
+          ) : (
+            <RegisterForm
+              key="register"
+              onSwitchToLogin={() => setMode('login')}
             />
-          </div>
-
-          {authError && (
-            <div className="p-3 rounded-lg bg-destructive/15 border border-destructive/20 text-xs text-destructive font-medium animate-fade-in">
-              {authError}
-            </div>
           )}
+        </AnimatePresence>
 
-          <Button
-            type="submit"
-            variant="primary"
-            className="w-full h-11 text-sm font-semibold mt-2"
-            isLoading={isLoading}
-          >
-            {isRegister ? 'Register & Start Chatting' : 'Sign In to TalkSpace'}
-            {!isLoading && <ArrowRight className="w-4 h-4 ml-2" />}
-          </Button>
-        </form>
-
-        {/* Footer info */}
-        <div className="mt-6 pt-4 border-t border-border/50 text-center text-[11px] text-muted-foreground">
-          Live encrypted communication platform &bull; Powered by Supabase & Socket.IO
+        {/* Security badge footer */}
+        <div className="mt-6 pt-4 border-t border-border/40 text-center flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+          <span>PBKDF2 SHA-512 Encrypted &bull; Supabase Realtime</span>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
