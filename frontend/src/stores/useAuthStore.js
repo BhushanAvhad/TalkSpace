@@ -7,8 +7,19 @@ export const useAuthStore = create((set, get) => ({
   isLoading: false,
   authError: null,
 
-  setUser: (user) => {
-    set({ user, isAuthenticated: !!user, authError: null, isLoading: false });
+  setUser: (userData) => {
+    set((state) => ({
+      user: userData ? { ...state.user, ...userData } : null,
+      isAuthenticated: !!userData,
+      authError: null,
+      isLoading: false
+    }));
+  },
+
+  updateProfile: (profileData) => {
+    if (socket.connected) {
+      socket.emit('updateProfile', profileData);
+    }
   },
 
   setAuthError: (error) => set({ authError: error, isLoading: false }),

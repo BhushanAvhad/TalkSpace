@@ -11,20 +11,60 @@ import {
   X,
   ShieldCheck,
   Layers,
+  Bell,
+  BellOff,
+  User,
 } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { ChannelInfoModal } from './ChannelInfoModal';
+import { UserProfileModal } from './UserProfileModal';
 import { useChatStore } from '@/stores/useChatStore';
+import { toast } from 'sonner';
 
-export function ChatHeader({ onOpenMobileSidebar, onSearchConversation, conversationSearchQuery }) {
-  const { currentChat, setCurrentChat, activeUsers, sharedMediaOpen, toggleSharedMedia } =
-    useChatStore();
+export function ChatHeader({
+  onOpenMobileSidebar,
+  onOpenSearchModal,
+  onSearchConversation,
+  conversationSearchQuery,
+}) {
+  const {
+    currentChat,
+    setCurrentChat,
+    activeUsers,
+    sharedMediaOpen,
+    toggleSharedMedia,
+    mutedChats,
+    toggleMuteChat,
+    userProfiles,
+  } = useChatStore();
+
   const [infoOpen, setInfoOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
 
   const isGroup = currentChat === 'group';
+  const isMuted = mutedChats.includes(currentChat);
+
+  const partnerProfile = !isGroup ? userProfiles[currentChat] : null;
+
+  const handleToggleMute = () => {
+    toggleMuteChat(currentChat);
+    if (isMuted) {
+      toast.success(`Unmuted ${isGroup ? '#general' : `@${currentChat}`}`);
+    } else {
+      toast.info(`Muted notifications for ${isGroup ? '#general' : `@${currentChat}`}`);
+    }
+  };
+
+  const handleHeaderClick = () => {
+    if (isGroup) {
+      setInfoOpen(true);
+    } else {
+      setProfileOpen(true);
+    }
+  };
 
   return (
     <>
@@ -57,15 +97,21 @@ export function ChatHeader({ onOpenMobileSidebar, onSearchConversation, conversa
           {/* Avatar & Title */}
           <div
             className="flex items-center gap-2.5 min-w-0 cursor-pointer hover:opacity-90 transition-opacity"
-            onClick={() => setInfoOpen(true)}
-            title="Click to view details"
+            onClick={handleHeaderClick}
+            title={isGroup ? 'Click to view group details' : `Click to view @${currentChat}'s profile`}
           >
             {isGroup ? (
               <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 text-white flex items-center justify-center font-bold shadow-glow flex-shrink-0">
                 <Hash className="w-4 h-4" />
               </div>
             ) : (
-              <Avatar name={currentChat} size="md" status="online" className="flex-shrink-0" />
+              <Avatar
+                src={partnerProfile?.avatarUrl}
+                name={currentChat}
+                size="md"
+                status="online"
+                className="flex-shrink-0"
+              />
             )}
 
             <div className="min-w-0">
@@ -82,6 +128,11 @@ export function ChatHeader({ onOpenMobileSidebar, onSearchConversation, conversa
                     Direct
                   </Badge>
                 )}
+                {isMuted && (
+                  <Badge variant="warning" className="text-[10px] py-0 px-1.5 gap-1">
+                    <BellOff className="w-2.5 h-2.5" /> Muted
+                  </Badge>
+                )}
               </div>
 
               <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 truncate">
@@ -95,7 +146,7 @@ export function ChatHeader({ onOpenMobileSidebar, onSearchConversation, conversa
                 ) : (
                   <>
                     <Circle className="w-2 h-2 fill-emerald-500 text-emerald-500" />
-                    <span>Realtime session &bull; PBKDF2</span>
+                    <span>{partnerProfile?.statusText || 'Active now'}</span>
                   </>
                 )}
               </div>
@@ -140,6 +191,32 @@ export function ChatHeader({ onOpenMobileSidebar, onSearchConversation, conversa
             </Button>
           )}
 
+          {/* Global Search (Ctrl+K) */}
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onOpenSearchModal}
+            title="Global Search (Ctrl+K)"
+            className="text-muted-foreground hover:text-foreground hidden sm:inline-flex"
+          >
+            <div className="flex items-center gap-1 text-xs">
+              <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-muted border border-border/80">
+                ⌘K
+              </kbd>
+            </div>
+          </Button>
+
+          {/* Mute/Unmute toggle */}
+          <Button
+            size="icon-sm"
+            variant={isMuted ? 'secondary' : 'ghost'}
+            onClick={handleToggleMute}
+            title={isMuted ? 'Unmute conversation notifications' : 'Mute conversation notifications'}
+            className={isMuted ? 'text-amber-500 hover:text-amber-400' : 'text-muted-foreground hover:text-foreground'}
+          >
+            {isMuted ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+          </Button>
+
           {/* Shared media gallery panel trigger */}
           <Button
             size="icon-sm"
@@ -151,21 +228,30 @@ export function ChatHeader({ onOpenMobileSidebar, onSearchConversation, conversa
             <Layers className="w-4 h-4" />
           </Button>
 
-          {/* Info dialog trigger */}
+          {/* Channel or User details */}
           <Button
             size="icon-sm"
             variant="ghost"
-            onClick={() => setInfoOpen(true)}
-            title="Channel Details"
+            onClick={handleHeaderClick}
+            title={isGroup ? 'Channel Details' : 'User Details'}
             className="text-muted-foreground hover:text-foreground"
           >
-            <Info className="w-4 h-4" />
+            {isGroup ? <Info className="w-4 h-4" /> : <User className="w-4 h-4" />}
           </Button>
         </div>
       </header>
 
-      {/* Info Modal */}
+      {/* Group Info Modal */}
       <ChannelInfoModal open={infoOpen} onOpenChange={setInfoOpen} />
+
+      {/* User Profile Modal for direct chat partner */}
+      {!isGroup && (
+        <UserProfileModal
+          open={profileOpen}
+          onOpenChange={setProfileOpen}
+          targetUsername={currentChat}
+        />
+      )}
     </>
   );
 }

@@ -10,9 +10,10 @@ import { ChatHeader } from '@/components/chat/ChatHeader';
 import { MessageList } from '@/components/chat/MessageList';
 import { MessageInput } from '@/components/chat/MessageInput';
 import { SharedMediaPanel } from '@/components/chat/SharedMediaPanel';
+import { SearchModal } from '@/components/chat/SearchModal';
 
 export function App() {
-  const { user, isAuthenticated, setUser, setAuthError } = useAuthStore();
+  const { user, isAuthenticated, setUser, setAuthError, updateProfile } = useAuthStore();
   const {
     setActiveUsers,
     setGroupMessages,
@@ -24,6 +25,13 @@ export function App() {
     setConnectionStatus,
     sharedMediaOpen,
     setSharedMediaOpen,
+    searchModalOpen,
+    setSearchModalOpen,
+    onMessageEdited,
+    onMessageDeleted,
+    onReactionUpdated,
+    onConversationRead,
+    setUserProfileCache,
   } = useChatStore();
 
   // 'landing' | 'auth' | 'chat'
@@ -31,6 +39,19 @@ export function App() {
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [conversationSearchQuery, setConversationSearchQuery] = useState('');
+
+  // Global Ctrl+K / Cmd+K listener for Search Modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchModalOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [setSearchModalOpen]);
 
   // Global Socket.IO event listeners
   useEffect(() => {
@@ -44,7 +65,12 @@ export function App() {
 
     const handleAuthResult = (result) => {
       if (result.success) {
-        setUser({ username: result.username });
+        setUser({
+          username: result.username,
+          avatarUrl: result.avatarUrl,
+          statusText: result.statusText,
+          bio: result.bio,
+        });
         toast.success(`Welcome to TalkSpace, @${result.username}!`);
         setCurrentView('chat');
       } else {
@@ -97,6 +123,36 @@ export function App() {
       }
     };
 
+    // Phase 6 Socket Event Reducers
+    const handleMessageEdited = (data) => {
+      onMessageEdited(data);
+    };
+
+    const handleMessageDeleted = (data) => {
+      onMessageDeleted(data);
+    };
+
+    const handleReactionUpdated = (data) => {
+      onReactionUpdated(data);
+    };
+
+    const handleConversationRead = (data) => {
+      onConversationRead(data);
+    };
+
+    const handleUserProfileChanged = (profile) => {
+      setUserProfileCache(profile.username, profile);
+      if (profile.username === user?.username) {
+        updateProfile(profile);
+      }
+    };
+
+    const handleUserProfileResult = (profile) => {
+      if (profile?.username) {
+        setUserProfileCache(profile.username, profile);
+      }
+    };
+
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.on('connect_error', handleConnectError);
@@ -110,6 +166,12 @@ export function App() {
     socket.on('displayTyping', handleDisplayTyping);
     socket.on('stopTyping', handleStopTyping);
     socket.on('groupHistoryPurged', handleGroupHistoryPurged);
+    socket.on('messageEdited', handleMessageEdited);
+    socket.on('messageDeleted', handleMessageDeleted);
+    socket.on('reactionUpdated', handleReactionUpdated);
+    socket.on('conversationRead', handleConversationRead);
+    socket.on('userProfileChanged', handleUserProfileChanged);
+    socket.on('userProfileResult', handleUserProfileResult);
 
     return () => {
       socket.off('connect', handleConnect);
@@ -125,8 +187,14 @@ export function App() {
       socket.off('displayTyping', handleDisplayTyping);
       socket.off('stopTyping', handleStopTyping);
       socket.off('groupHistoryPurged', handleGroupHistoryPurged);
+      socket.off('messageEdited', handleMessageEdited);
+      socket.off('messageDeleted', handleMessageDeleted);
+      socket.off('reactionUpdated', handleReactionUpdated);
+      socket.off('conversationRead', handleConversationRead);
+      socket.off('userProfileChanged', handleUserProfileChanged);
+      socket.off('userProfileResult', handleUserProfileResult);
     };
-  }, [user?.username]);
+  }, [user?.username, onMessageEdited, onMessageDeleted, onReactionUpdated, onConversationRead, setUserProfileCache, updateProfile]);
 
   // Request group history when user enters the chat view
   useEffect(() => {
@@ -171,7 +239,10 @@ export function App() {
         <div className="h-screen w-screen flex overflow-hidden bg-background text-foreground font-sans antialiased">
           {/* Desktop Persistent Sidebar */}
           <div className="hidden md:block h-full">
-            <Sidebar onBackToHome={() => setCurrentView('landing')} />
+            <Sidebar
+              onBackToHome={() => setCurrentView('landing')}
+              onOpenSearchModal={() => setSearchModalOpen(true)}
+            />
           </div>
 
           {/* Mobile Slide-Over Drawer */}
@@ -188,6 +259,10 @@ export function App() {
                     setMobileSidebarOpen(false);
                     setCurrentView('landing');
                   }}
+                  onOpenSearchModal={() => {
+                    setMobileSidebarOpen(false);
+                    setSearchModalOpen(true);
+                  }}
                 />
               </div>
             </div>
@@ -197,6 +272,7 @@ export function App() {
           <main className="flex-1 flex flex-col h-full overflow-hidden bg-background">
             <ChatHeader
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+              onOpenSearchModal={() => setSearchModalOpen(true)}
               onSearchConversation={setConversationSearchQuery}
               conversationSearchQuery={conversationSearchQuery}
             />
@@ -208,6 +284,12 @@ export function App() {
           <SharedMediaPanel
             open={sharedMediaOpen}
             onClose={() => setSharedMediaOpen(false)}
+          />
+
+          {/* Global Search Palette Modal (Ctrl+K) */}
+          <SearchModal
+            open={searchModalOpen}
+            onOpenChange={setSearchModalOpen}
           />
         </div>
       ) : null}

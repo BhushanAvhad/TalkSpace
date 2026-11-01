@@ -19,7 +19,7 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const users = new Map(); // Store users as { socketId → { username, profileImage } }
+const users = new Map(); // Store users as { socketId → { username, profileImage, statusText, bio } }
 const sentMessageIds = new Set(); // Store sent message IDs to prevent duplicates
 
 // Supported & Protected File Extensions and MIME Types
@@ -125,22 +125,32 @@ function verifyPassword(password, storedHash) {
     return hash === originalHash;
 }
 
-// Helper to format Supabase message rows (reconstructs attachments from JSON payload if present)
+// Helper to format Supabase message rows (reconstructs attachments, replies, reactions & status from JSON payload)
 function formatMessageRow(row) {
     let text = row.message;
     let fileURL = null;
     let fileName = null;
     let fileSize = null;
     let fileType = null;
+    let replyTo = null;
+    let isEdited = false;
+    let editedAt = null;
+    let isDeleted = false;
+    let reactions = {};
 
-    if (typeof row.message === 'string' && row.message.trim().startsWith('{') && row.message.includes('"fileURL"')) {
+    if (typeof row.message === 'string' && row.message.trim().startsWith('{')) {
         try {
             const parsed = JSON.parse(row.message);
-            text = parsed.text || '';
+            text = parsed.text !== undefined ? parsed.text : (parsed.message || '');
             fileURL = parsed.fileURL || null;
             fileName = parsed.fileName || null;
             fileSize = parsed.fileSize || null;
             fileType = parsed.fileType || null;
+            replyTo = parsed.replyTo || null;
+            isEdited = !!parsed.isEdited;
+            editedAt = parsed.editedAt || null;
+            isDeleted = !!parsed.isDeleted;
+            reactions = parsed.reactions || {};
         } catch (e) {
             // Keep original row.message if not valid JSON
         }
@@ -157,6 +167,11 @@ function formatMessageRow(row) {
         fileName,
         fileSize,
         fileType,
+        replyTo,
+        isEdited,
+        editedAt,
+        isDeleted,
+        reactions,
         profilePicture: 'profile.png'
     };
 }
@@ -246,6 +261,19 @@ app.post('/upload', (req, res) => {
             fileSize: req.file.size,
             fileType: req.file.mimetype
         });
+    });
+});
+
+// Profile Picture Upload Endpoint
+app.post('/uploadProfilePic', (req, res) => {
+    upload.single('file')(req, res, (err) => {
+        if (err) {
+            return res.status(400).json({ error: err.message || 'Avatar upload failed.' });
+        }
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded.' });
+        }
+        res.json({ fileURL: `/api/files/${req.file.filename}` });
     });
 });
 
@@ -358,18 +386,51 @@ io.on('connection', (socket) => {
             }
 
             const password_hash = hashPassword(password);
-            const { error: insertError } = await supabase
+            let insertError = null;
+
+            // Attempt insert with profile columns; fallback to base columns if columns not migrated yet
+            const resWithProfile = await supabase
                 .from('users')
-                .insert([{ username: cleanUsername, password_hash }]);
+                .insert([{
+                    username: cleanUsername,
+                    password_hash,
+                    avatar_url: 'profile.png',
+                    status_text: 'Available',
+                    bio: ''
+                }]);
+
+            if (resWithProfile.error) {
+                const resBase = await supabase
+                    .from('users')
+                    .insert([{
+                        username: cleanUsername,
+                        password_hash
+                    }]);
+                insertError = resBase.error;
+            }
 
             if (insertError) {
                 console.error('Supabase insert user error:', insertError);
                 return socket.emit('authResult', { success: false, message: 'Registration failed: ' + insertError.message });
             }
 
-            users.set(socket.id, { username: cleanUsername, profileImage: 'profile.png' });
-            socket.emit('authResult', { success: true, username: cleanUsername });
+            users.set(socket.id, {
+                username: cleanUsername,
+                profileImage: 'profile.png',
+                statusText: 'Available',
+                bio: ''
+            });
+
+            socket.emit('authResult', {
+                success: true,
+                username: cleanUsername,
+                avatarUrl: 'profile.png',
+                statusText: 'Available',
+                bio: ''
+            });
+
             io.emit('updateUsers', Array.from(users.values()).map(u => u.username));
+            io.emit('updateUsersDetailed', Array.from(users.values()));
 
             await sendRecentGroupHistory(socket);
         } catch (err) {
@@ -406,9 +467,27 @@ io.on('connection', (socket) => {
                 return socket.emit('authResult', { success: false, message: 'Incorrect password.' });
             }
 
-            users.set(socket.id, { username: userRecord.username, profileImage: 'profile.png' });
-            socket.emit('authResult', { success: true, username: userRecord.username });
+            const avatarUrl = userRecord.avatar_url || 'profile.png';
+            const statusText = userRecord.status_text || 'Available';
+            const bio = userRecord.bio || '';
+
+            users.set(socket.id, {
+                username: userRecord.username,
+                profileImage: avatarUrl,
+                statusText,
+                bio
+            });
+
+            socket.emit('authResult', {
+                success: true,
+                username: userRecord.username,
+                avatarUrl,
+                statusText,
+                bio
+            });
+
             io.emit('updateUsers', Array.from(users.values()).map(u => u.username));
+            io.emit('updateUsersDetailed', Array.from(users.values()));
 
             await sendRecentGroupHistory(socket);
         } catch (err) {
@@ -442,7 +521,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Request private chat history between two users
+    // Request private chat history between two users (Retained indefinitely)
     socket.on('requestPrivateHistory', async ({ partner }) => {
         const currentUser = users.get(socket.id)?.username;
         if (!currentUser || !partner) return;
@@ -467,41 +546,47 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle group messages (text or file attachment)
+    // Handle group messages (text, file attachment, and replies)
     socket.on('groupMessage', async (msg) => {
         const sender = users.get(socket.id)?.username;
-        if (sender === msg.user && !sentMessageIds.has(msg.messageId)) {
-            sentMessageIds.add(msg.messageId);
+        const messageId = msg.messageId || 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+        if (sender === msg.user && !sentMessageIds.has(messageId)) {
+            sentMessageIds.add(messageId);
 
             const messageData = {
                 user: msg.user,
                 message: msg.message || '',
                 type: 'group',
                 timestamp: new Date().toISOString(),
-                messageId: msg.messageId,
+                messageId: messageId,
                 fileURL: msg.fileURL || null,
                 fileName: msg.fileName || null,
                 fileSize: msg.fileSize || null,
                 fileType: msg.fileType || null,
-                profilePicture: msg.profilePicture || 'profile.png',
+                replyTo: msg.replyTo || null,
+                isEdited: false,
+                isDeleted: false,
+                reactions: {},
+                profilePicture: users.get(socket.id)?.profileImage || 'profile.png',
             };
 
-            // Reconstruct JSON payload if message contains an attachment for clean Supabase storage
-            const messageToSave = msg.fileURL
-                ? JSON.stringify({
-                    text: msg.message || '',
-                    fileURL: msg.fileURL,
-                    fileName: msg.fileName,
-                    fileSize: msg.fileSize,
-                    fileType: msg.fileType
-                })
-                : (msg.message || '');
+            const messageToSave = JSON.stringify({
+                text: msg.message || '',
+                fileURL: msg.fileURL || null,
+                fileName: msg.fileName || null,
+                fileSize: msg.fileSize || null,
+                fileType: msg.fileType || null,
+                replyTo: msg.replyTo || null,
+                isEdited: false,
+                isDeleted: false,
+                reactions: {}
+            });
 
             try {
                 await supabase
                     .from('messages')
                     .insert([{
-                        message_id: msg.messageId,
+                        message_id: messageId,
                         sender: msg.user,
                         target: null,
                         type: 'group',
@@ -515,12 +600,13 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle private messages (text or file attachment)
+    // Handle private messages (text, file attachment, and replies)
     socket.on('privateMessage', async (msg) => {
         const sender = users.get(socket.id)?.username;
-        if (!sentMessageIds.has(msg.messageId) && sender) {
-            sentMessageIds.add(msg.messageId);
-            const targetEntry = Array.from(users.entries()).find(([id, user]) => user.username === msg.target);
+        const messageId = msg.messageId || 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+        if (!sentMessageIds.has(messageId) && sender) {
+            sentMessageIds.add(messageId);
+            const targetEntry = Array.from(users.entries()).find(([id, user]) => user.username.toLowerCase() === msg.target.toLowerCase());
 
             const messageData = {
                 user: msg.user,
@@ -528,29 +614,35 @@ io.on('connection', (socket) => {
                 message: msg.message || '',
                 type: 'private',
                 timestamp: new Date().toISOString(),
-                messageId: msg.messageId,
+                messageId: messageId,
                 fileURL: msg.fileURL || null,
                 fileName: msg.fileName || null,
                 fileSize: msg.fileSize || null,
                 fileType: msg.fileType || null,
-                profilePicture: msg.profilePicture || 'profile.png',
+                replyTo: msg.replyTo || null,
+                isEdited: false,
+                isDeleted: false,
+                reactions: {},
+                profilePicture: users.get(socket.id)?.profileImage || 'profile.png',
             };
 
-            const messageToSave = msg.fileURL
-                ? JSON.stringify({
-                    text: msg.message || '',
-                    fileURL: msg.fileURL,
-                    fileName: msg.fileName,
-                    fileSize: msg.fileSize,
-                    fileType: msg.fileType
-                })
-                : (msg.message || '');
+            const messageToSave = JSON.stringify({
+                text: msg.message || '',
+                fileURL: msg.fileURL || null,
+                fileName: msg.fileName || null,
+                fileSize: msg.fileSize || null,
+                fileType: msg.fileType || null,
+                replyTo: msg.replyTo || null,
+                isEdited: false,
+                isDeleted: false,
+                reactions: {}
+            });
 
             try {
                 await supabase
                     .from('messages')
                     .insert([{
-                        message_id: msg.messageId,
+                        message_id: messageId,
                         sender: msg.user,
                         target: msg.target,
                         type: 'private',
@@ -568,6 +660,364 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Edit message
+    socket.on('editMessage', async ({ messageId, newText }) => {
+        const currentUser = users.get(socket.id)?.username;
+        if (!currentUser || !messageId || !newText || !newText.trim()) return;
+
+        try {
+            const { data: row, error: fetchErr } = await supabase
+                .from('messages')
+                .select('*')
+                .eq('message_id', messageId)
+                .maybeSingle();
+
+            if (fetchErr || !row) return;
+
+            // Security check: Only the author can edit
+            if (row.sender.toLowerCase() !== currentUser.toLowerCase()) {
+                return socket.emit('errorNotification', { message: 'Unauthorized: You can only edit your own messages.' });
+            }
+
+            let payload = {};
+            if (typeof row.message === 'string' && row.message.trim().startsWith('{')) {
+                try { payload = JSON.parse(row.message); } catch (e) { payload = { text: row.message }; }
+            } else {
+                payload = { text: row.message };
+            }
+
+            payload.text = newText.trim();
+            payload.isEdited = true;
+            payload.editedAt = new Date().toISOString();
+
+            await supabase
+                .from('messages')
+                .update({ message: JSON.stringify(payload) })
+                .eq('message_id', messageId);
+
+            const editEvent = {
+                messageId,
+                newText: payload.text,
+                isEdited: true,
+                editedAt: payload.editedAt,
+                type: row.type,
+                target: row.target
+            };
+
+            if (row.type === 'group') {
+                io.emit('messageEdited', editEvent);
+            } else {
+                const partner = row.sender.toLowerCase() === currentUser.toLowerCase() ? row.target : row.sender;
+                const targetEntry = Array.from(users.entries()).find(([_, u]) => u.username.toLowerCase() === partner.toLowerCase());
+                if (targetEntry) {
+                    io.to(targetEntry[0]).emit('messageEdited', editEvent);
+                }
+                socket.emit('messageEdited', editEvent);
+            }
+        } catch (err) {
+            console.error('Error editing message:', err);
+        }
+    });
+
+    // Delete message
+    socket.on('deleteMessage', async ({ messageId }) => {
+        const currentUser = users.get(socket.id)?.username;
+        if (!currentUser || !messageId) return;
+
+        try {
+            const { data: row, error: fetchErr } = await supabase
+                .from('messages')
+                .select('*')
+                .eq('message_id', messageId)
+                .maybeSingle();
+
+            if (fetchErr || !row) return;
+
+            // Security check: Only the author can delete
+            if (row.sender.toLowerCase() !== currentUser.toLowerCase()) {
+                return socket.emit('errorNotification', { message: 'Unauthorized: You can only delete your own messages.' });
+            }
+
+            let payload = {};
+            if (typeof row.message === 'string' && row.message.trim().startsWith('{')) {
+                try { payload = JSON.parse(row.message); } catch (e) { payload = { text: row.message }; }
+            } else {
+                payload = { text: row.message };
+            }
+
+            payload.isDeleted = true;
+            payload.text = 'This message was deleted';
+            payload.fileURL = null;
+            payload.fileName = null;
+
+            await supabase
+                .from('messages')
+                .update({ message: JSON.stringify(payload) })
+                .eq('message_id', messageId);
+
+            const deleteEvent = {
+                messageId,
+                isDeleted: true,
+                type: row.type,
+                target: row.target
+            };
+
+            if (row.type === 'group') {
+                io.emit('messageDeleted', deleteEvent);
+            } else {
+                const partner = row.sender.toLowerCase() === currentUser.toLowerCase() ? row.target : row.sender;
+                const targetEntry = Array.from(users.entries()).find(([_, u]) => u.username.toLowerCase() === partner.toLowerCase());
+                if (targetEntry) {
+                    io.to(targetEntry[0]).emit('messageDeleted', deleteEvent);
+                }
+                socket.emit('messageDeleted', deleteEvent);
+            }
+        } catch (err) {
+            console.error('Error deleting message:', err);
+        }
+    });
+
+    // Toggle message reaction (persistent & real-time)
+    socket.on('toggleReaction', async ({ messageId, emoji }) => {
+        const currentUser = users.get(socket.id)?.username;
+        if (!currentUser || !messageId || !emoji) return;
+
+        try {
+            const { data: row, error: fetchErr } = await supabase
+                .from('messages')
+                .select('*')
+                .eq('message_id', messageId)
+                .maybeSingle();
+
+            if (fetchErr || !row) return;
+
+            let payload = {};
+            if (typeof row.message === 'string' && row.message.trim().startsWith('{')) {
+                try { payload = JSON.parse(row.message); } catch (e) { payload = { text: row.message }; }
+            } else {
+                payload = { text: row.message };
+            }
+
+            if (!payload.reactions) payload.reactions = {};
+            const userList = payload.reactions[emoji] || [];
+
+            // Toggle user in reaction array (prevents duplicate reactions per user)
+            if (userList.includes(currentUser)) {
+                payload.reactions[emoji] = userList.filter(u => u !== currentUser);
+                if (payload.reactions[emoji].length === 0) {
+                    delete payload.reactions[emoji];
+                }
+            } else {
+                payload.reactions[emoji] = [...userList, currentUser];
+            }
+
+            await supabase
+                .from('messages')
+                .update({ message: JSON.stringify(payload) })
+                .eq('message_id', messageId);
+
+            const reactionEvent = {
+                messageId,
+                reactions: payload.reactions,
+                type: row.type,
+                target: row.target
+            };
+
+            if (row.type === 'group') {
+                io.emit('reactionUpdated', reactionEvent);
+            } else {
+                const partner = row.sender.toLowerCase() === currentUser.toLowerCase() ? row.target : row.sender;
+                const targetEntry = Array.from(users.entries()).find(([_, u]) => u.username.toLowerCase() === partner.toLowerCase());
+                if (targetEntry) {
+                    io.to(targetEntry[0]).emit('reactionUpdated', reactionEvent);
+                }
+                socket.emit('reactionUpdated', reactionEvent);
+            }
+        } catch (err) {
+            console.error('Error toggling reaction:', err);
+        }
+    });
+
+    // Advanced Authorized Search
+    socket.on('searchTalkSpace', async ({ query, chatType = 'all', partner = null }) => {
+        const currentUser = users.get(socket.id)?.username;
+        if (!currentUser || !query || !query.trim()) return;
+
+        const cleanQuery = query.trim().toLowerCase();
+
+        try {
+            // 1. Search Users
+            const { data: matchedUsers } = await supabase
+                .from('users')
+                .select('username, avatar_url, status_text')
+                .ilike('username', `%${cleanQuery}%`)
+                .limit(10);
+
+            // 2. Search Public Group Messages (within 48h retention)
+            const retentionHours = getRetentionHours();
+            const cutoffDate = new Date(Date.now() - retentionHours * 60 * 60 * 1000).toISOString();
+
+            let groupResults = [];
+            if (chatType === 'all' || chatType === 'group') {
+                const { data: grpMessages } = await supabase
+                    .from('messages')
+                    .select('*')
+                    .eq('type', 'group')
+                    .gt('created_at', cutoffDate)
+                    .ilike('message', `%${cleanQuery}%`)
+                    .order('created_at', { ascending: false })
+                    .limit(30);
+
+                if (grpMessages) groupResults = grpMessages.map(formatMessageRow);
+            }
+
+            // 3. Search Private Messages (STRICTLY constrained to currentUser)
+            let privateResults = [];
+            if (chatType === 'all' || chatType === 'private') {
+                let pvtQuery = supabase
+                    .from('messages')
+                    .select('*')
+                    .eq('type', 'private')
+                    .or(`sender.eq."${currentUser}",target.eq."${currentUser}"`)
+                    .ilike('message', `%${cleanQuery}%`)
+                    .order('created_at', { ascending: false })
+                    .limit(30);
+
+                if (partner) {
+                    pvtQuery = supabase
+                        .from('messages')
+                        .select('*')
+                        .eq('type', 'private')
+                        .or(`and(sender.eq."${currentUser}",target.eq."${partner}"),and(sender.eq."${partner}",target.eq."${currentUser}")`)
+                        .ilike('message', `%${cleanQuery}%`)
+                        .order('created_at', { ascending: false })
+                        .limit(30);
+                }
+
+                const { data: pvtMessages } = await pvtQuery;
+                if (pvtMessages) privateResults = pvtMessages.map(formatMessageRow);
+            }
+
+            const formattedUsers = (matchedUsers || []).map(u => ({
+                username: u.username,
+                avatar_url: u.avatar_url || 'profile.png',
+                status_text: u.status_text || 'Available'
+            }));
+            const formattedMessages = [...groupResults, ...privateResults];
+
+            socket.emit('searchResults', {
+                query: cleanQuery,
+                results: {
+                    users: formattedUsers,
+                    messages: formattedMessages
+                },
+                users: formattedUsers,
+                messages: formattedMessages
+            });
+        } catch (err) {
+            console.error('Error executing search:', err);
+        }
+    });
+
+    // Mark private conversation messages as read
+    socket.on('markMessagesRead', ({ partner }) => {
+        const currentUser = users.get(socket.id)?.username;
+        if (!currentUser || !partner) return;
+
+        const targetEntry = Array.from(users.entries()).find(([_, u]) => u.username.toLowerCase() === partner.toLowerCase());
+        if (targetEntry) {
+            io.to(targetEntry[0]).emit('conversationRead', {
+                by: currentUser,
+                chat: currentUser,
+                timestamp: new Date().toISOString()
+            });
+        }
+    });
+
+    // Update user profile
+    socket.on('updateProfile', async ({ statusText, bio, avatarUrl }) => {
+        const currentUser = users.get(socket.id)?.username;
+        if (!currentUser) return;
+
+        try {
+            const updateFields = {};
+            if (statusText !== undefined) updateFields.status_text = statusText.trim().slice(0, 100);
+            if (bio !== undefined) updateFields.bio = bio.trim().slice(0, 300);
+            if (avatarUrl !== undefined) updateFields.avatar_url = avatarUrl;
+
+            try {
+                await supabase
+                    .from('users')
+                    .update(updateFields)
+                    .eq('username', currentUser);
+            } catch (dbErr) {
+                // Non-fatal if remote schema columns not migrated yet
+            }
+
+            const sessionUser = users.get(socket.id);
+            if (sessionUser) {
+                if (statusText !== undefined) sessionUser.statusText = updateFields.status_text;
+                if (avatarUrl !== undefined) sessionUser.profileImage = updateFields.avatar_url;
+                if (bio !== undefined) sessionUser.bio = updateFields.bio;
+            }
+
+            const resolvedProfile = {
+                username: currentUser,
+                avatarUrl: updateFields.avatar_url || sessionUser?.profileImage || 'profile.png',
+                statusText: updateFields.status_text || sessionUser?.statusText || 'Available',
+                bio: updateFields.bio || ''
+            };
+
+            socket.emit('profileUpdated', {
+                success: true,
+                username: currentUser,
+                profile: resolvedProfile,
+                avatarUrl: resolvedProfile.avatarUrl,
+                statusText: resolvedProfile.statusText,
+                bio: resolvedProfile.bio
+            });
+
+            io.emit('userProfileChanged', {
+                username: currentUser,
+                avatarUrl: resolvedProfile.avatarUrl,
+                statusText: resolvedProfile.statusText,
+                bio: resolvedProfile.bio
+            });
+        } catch (err) {
+            console.error('Error updating profile:', err);
+        }
+    });
+
+    // Get specific user profile info
+    socket.on('getUserProfile', async ({ username }) => {
+        if (!username) return;
+        try {
+            const cleanUser = username.trim();
+            const activeUser = Array.from(users.values()).find(u => u.username.toLowerCase() === cleanUser.toLowerCase());
+            let userRecord = null;
+            try {
+                const { data } = await supabase
+                    .from('users')
+                    .select('*')
+                    .ilike('username', cleanUser)
+                    .maybeSingle();
+                userRecord = data;
+            } catch (e) {}
+
+            socket.emit('userProfileResult', {
+                username: cleanUser,
+                avatar_url: userRecord?.avatar_url || activeUser?.profileImage || 'profile.png',
+                avatarUrl: userRecord?.avatar_url || activeUser?.profileImage || 'profile.png',
+                status_text: userRecord?.status_text || activeUser?.statusText || 'Available',
+                statusText: userRecord?.status_text || activeUser?.statusText || 'Available',
+                bio: userRecord?.bio || activeUser?.bio || '',
+                joinedAt: userRecord?.created_at
+            });
+        } catch (err) {
+            console.error('Error fetching user profile:', err);
+        }
+    });
+
     // Handle typing indicators
     socket.on('typing', ({ target }) => {
         const user = users.get(socket.id);
@@ -576,7 +1026,7 @@ io.on('connection', (socket) => {
         if (target === 'group') {
             socket.broadcast.emit('displayTyping', { user: user.username, isTyping: true, target: 'group' });
         } else {
-            const targetEntry = Array.from(users.entries()).find(([id, u]) => u.username === target);
+            const targetEntry = Array.from(users.entries()).find(([id, u]) => u.username.toLowerCase() === target.toLowerCase());
             if (targetEntry) {
                 const [targetSocketId] = targetEntry;
                 io.to(targetSocketId).emit('displayTyping', { user: user.username, isTyping: true });
@@ -590,7 +1040,7 @@ io.on('connection', (socket) => {
 
     // Handle Chat Requests
     socket.on('chatRequest', ({ to, from }) => {
-        const targetEntry = Array.from(users.entries()).find(([id, user]) => user.username === to);
+        const targetEntry = Array.from(users.entries()).find(([id, user]) => user.username.toLowerCase() === to.toLowerCase());
         if (targetEntry) {
             const [targetSocketId] = targetEntry;
             io.to(targetSocketId).emit('chatRequest', { from });
@@ -599,7 +1049,7 @@ io.on('connection', (socket) => {
 
     // Handle Chat Responses
     socket.on('chatResponse', ({ to, accepted }) => {
-        const targetEntry = Array.from(users.entries()).find(([id, user]) => user.username === to);
+        const targetEntry = Array.from(users.entries()).find(([id, user]) => user.username.toLowerCase() === to.toLowerCase());
         if (targetEntry) {
             const [targetSocketId] = targetEntry;
             io.to(targetSocketId).emit('chatResponse', { from: users.get(socket.id)?.username, accepted });
@@ -621,6 +1071,7 @@ io.on('connection', (socket) => {
             });
 
             io.emit('updateUsers', Array.from(users.values()).map(u => u.username));
+            io.emit('updateUsersDetailed', Array.from(users.values()));
         }
     });
 });

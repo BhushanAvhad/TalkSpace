@@ -7,10 +7,13 @@ import {
   X,
   UploadCloud,
   CornerDownLeft,
+  Pencil,
+  Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { AttachmentMenu } from './AttachmentMenu';
 import { FilePreviewTray } from './FilePreviewTray';
+import { QuotedReplyPreview } from './QuotedReplyPreview';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useChatStore } from '@/stores/useChatStore';
 import { toast } from 'sonner';
@@ -26,7 +29,17 @@ const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
 
 export function MessageInput() {
   const { user } = useAuthStore();
-  const { sendTextMessage, sendFileMessage, emitTyping, currentChat } = useChatStore();
+  const {
+    sendTextMessage,
+    sendFileMessage,
+    emitTyping,
+    currentChat,
+    replyingTo,
+    clearReplyingTo,
+    editingMessage,
+    clearEditingMessage,
+    editMessage,
+  } = useChatStore();
 
   const [text, setText] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
@@ -43,6 +56,14 @@ export function MessageInput() {
   const emojiPickerRef = useRef(null);
   const abortControllerRef = useRef(null);
   const lastTypingEmitRef = useRef(0);
+
+  // Sync textarea text if editingMessage changes
+  useEffect(() => {
+    if (editingMessage) {
+      setText(editingMessage.message || '');
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  }, [editingMessage]);
 
   // Auto-resize textarea based on text content
   useEffect(() => {
@@ -72,6 +93,11 @@ export function MessageInput() {
 
   // Handle stage files with size and extension validation
   const stageFiles = (filesList) => {
+    if (editingMessage) {
+      toast.warning('Cannot attach files while editing an existing message');
+      return;
+    }
+
     const validFiles = [];
     for (const file of Array.from(filesList)) {
       if (file.size > MAX_FILE_SIZE) {
@@ -126,7 +152,32 @@ export function MessageInput() {
     }
   };
 
+  const handleSaveEdit = () => {
+    if (!editingMessage) return;
+    const trimmed = text.trim();
+    if (!trimmed) {
+      toast.error('Message text cannot be empty');
+      return;
+    }
+
+    editMessage(editingMessage.messageId, trimmed);
+    clearEditingMessage();
+    setText('');
+    toast.success('Message updated');
+  };
+
+  const handleCancelEdit = () => {
+    clearEditingMessage();
+    setText('');
+  };
+
   const handleSend = async () => {
+    // If in editing mode, dispatch edit instead of new message
+    if (editingMessage) {
+      handleSaveEdit();
+      return;
+    }
+
     const hasText = !!text.trim();
     const hasFiles = stagedFiles.length > 0;
 
@@ -201,6 +252,15 @@ export function MessageInput() {
   };
 
   const handleKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      if (editingMessage) {
+        handleCancelEdit();
+      } else if (replyingTo) {
+        clearReplyingTo();
+      }
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -219,10 +279,11 @@ export function MessageInput() {
     textareaRef.current?.focus();
   };
 
-  const placeholderText =
-    currentChat === 'group'
-      ? 'Message #general (Enter to send, Shift+Enter for new line)...'
-      : `Message @${currentChat} (Enter to send)...`;
+  const placeholderText = editingMessage
+    ? 'Edit your message (Enter to save, Esc to cancel)...'
+    : currentChat === 'group'
+    ? 'Message #general (Enter to send, Shift+Enter for new line)...'
+    : `Message @${currentChat} (Enter to send)...`;
 
   return (
     <div
@@ -232,11 +293,46 @@ export function MessageInput() {
       className="p-3 sm:p-4 border-t border-border bg-card/75 backdrop-blur-md relative select-none"
     >
       {/* Drag & Drop Overlay */}
-      {isDragging && (
+      {isDragging && !editingMessage && (
         <div className="absolute inset-2 z-50 rounded-2xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm flex flex-col items-center justify-center gap-1.5 pointer-events-none animate-fade-in text-primary">
           <UploadCloud className="w-8 h-8 animate-bounce" />
           <span className="font-bold text-sm">Drop files here to attach</span>
           <span className="text-[11px] text-muted-foreground">Up to 25 MB per file</span>
+        </div>
+      )}
+
+      {/* Replying Banner */}
+      <QuotedReplyPreview />
+
+      {/* Editing Message Banner */}
+      {editingMessage && (
+        <div className="flex items-center justify-between px-3 py-2 bg-indigo-500/10 border-t border-indigo-500/30 text-xs text-foreground backdrop-blur-sm animate-fade-in">
+          <div className="flex items-center gap-2 min-w-0">
+            <Pencil className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+            <span className="font-semibold text-indigo-400 text-[11px]">
+              Editing message
+            </span>
+            <span className="text-[10px] text-muted-foreground hidden sm:inline">
+              (Press Escape to cancel)
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="px-2 py-0.5 rounded-lg text-[11px] bg-muted hover:bg-muted/80 text-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveEdit}
+              className="px-2.5 py-0.5 rounded-lg text-[11px] bg-indigo-600 hover:bg-indigo-500 text-white font-semibold flex items-center gap-1 shadow-glow"
+            >
+              <Check className="w-3 h-3" /> Save
+            </button>
+          </div>
         </div>
       )}
 
@@ -347,18 +443,20 @@ export function MessageInput() {
       {/* Main Composer Box */}
       <div className="flex items-end gap-2 bg-muted/40 border border-input rounded-2xl p-1.5 focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent transition-all shadow-subtle">
         {/* Attachment Button */}
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          data-attachment-trigger="true"
-          disabled={isUploading}
-          onClick={() => setShowAttachmentMenu((prev) => !prev)}
-          title="Share images or documents"
-          className="text-muted-foreground hover:text-foreground flex-shrink-0"
-        >
-          <Paperclip className="w-4 h-4" />
-        </Button>
+        {!editingMessage && (
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            data-attachment-trigger="true"
+            disabled={isUploading}
+            onClick={() => setShowAttachmentMenu((prev) => !prev)}
+            title="Share images or documents"
+            className="text-muted-foreground hover:text-foreground flex-shrink-0"
+          >
+            <Paperclip className="w-4 h-4" />
+          </Button>
+        )}
 
         {/* Emoji Button */}
         <Button
@@ -384,18 +482,26 @@ export function MessageInput() {
           className="flex-1 bg-transparent border-0 resize-none py-2 px-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none min-h-[38px] max-h-[140px] leading-relaxed"
         />
 
-        {/* Send Button */}
+        {/* Send / Save Button */}
         <Button
           type="button"
           size="icon"
           variant="primary"
           onClick={handleSend}
           disabled={(!text.trim() && stagedFiles.length === 0) || isUploading}
-          title={stagedFiles.length > 0 ? `Send with ${stagedFiles.length} file(s)` : 'Send message (Enter)'}
+          title={
+            editingMessage
+              ? 'Save changes (Enter)'
+              : stagedFiles.length > 0
+              ? `Send with ${stagedFiles.length} file(s)`
+              : 'Send message (Enter)'
+          }
           className="rounded-xl flex-shrink-0 shadow-glow"
         >
           {isUploading ? (
             <Loader2 className="w-4 h-4 animate-spin text-white" />
+          ) : editingMessage ? (
+            <Check className="w-4 h-4" />
           ) : (
             <Send className="w-4 h-4" />
           )}
@@ -406,16 +512,20 @@ export function MessageInput() {
       <div className="hidden sm:flex items-center justify-between text-[10px] text-muted-foreground/75 px-3 pt-1.5 select-none">
         <div className="flex items-center gap-2">
           <span>
-            <strong className="text-foreground/80">Enter ↵</strong> to send
+            <strong className="text-foreground/80">Enter ↵</strong> {editingMessage ? 'to save' : 'to send'}
           </span>
           <span>&bull;</span>
           <span>
             <strong className="text-foreground/80">Shift + Enter</strong> for new line
           </span>
-          <span>&bull;</span>
-          <span>Drag & drop files anytime</span>
+          {!editingMessage && (
+            <>
+              <span>&bull;</span>
+              <span>Drag & drop files anytime</span>
+            </>
+          )}
         </div>
-        <span>Encrypted &bull; 25 MB max</span>
+        <span>Encrypted &bull; TalkSpace Phase 6</span>
       </div>
     </div>
   );

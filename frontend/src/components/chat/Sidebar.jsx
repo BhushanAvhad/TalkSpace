@@ -6,6 +6,7 @@ import {
   MessageSquare,
   LogOut,
   Bell,
+  BellOff,
   UserPlus,
   Sparkles,
   ChevronRight,
@@ -16,6 +17,7 @@ import {
   Activity,
   Wifi,
   WifiOff,
+  User,
 } from 'lucide-react';
 import { Logo } from '@/components/brand/Logo';
 import { Avatar } from '@/components/ui/Avatar';
@@ -23,13 +25,13 @@ import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
-import { SettingsModal } from './SettingsModal';
+import { UserProfileModal } from './UserProfileModal';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useChatStore } from '@/stores/useChatStore';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
-export function Sidebar({ className, onCloseMobile, onBackToHome }) {
+export function Sidebar({ className, onCloseMobile, onBackToHome, onOpenSearchModal }) {
   const { user, logout } = useAuthStore();
   const {
     currentChat,
@@ -40,10 +42,13 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
     respondChatRequest,
     unreadCounts,
     connectionStatus,
+    mutedChats,
+    userProfiles,
   } = useChatStore();
 
   const [search, setSearch] = useState('');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [inspectedUser, setInspectedUser] = useState(null);
 
   // Filter online users (excluding current user)
   const otherUsers = activeUsers.filter(
@@ -62,6 +67,16 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
   const handleSendChatRequest = (partner) => {
     sendChatRequest(partner, user?.username);
     toast.success(`Chat request sent to @${partner}`);
+  };
+
+  const handleOpenMyProfile = () => {
+    setInspectedUser(null);
+    setProfileModalOpen(true);
+  };
+
+  const handleOpenUserProfile = (username) => {
+    setInspectedUser(username);
+    setProfileModalOpen(true);
   };
 
   const isConnected = connectionStatus === 'connected';
@@ -119,15 +134,25 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
           </div>
         </div>
 
-        {/* User Search Input */}
-        <div className="p-3 border-b border-sidebar-border/40">
+        {/* Search Bar with Global Search Trigger */}
+        <div className="p-3 border-b border-sidebar-border/40 flex items-center gap-2">
           <Input
             placeholder="Search channels or users..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             icon={<Search className="w-3.5 h-3.5 text-muted-foreground" />}
-            className="h-8 text-xs bg-muted/40 rounded-xl"
+            className="h-8 text-xs bg-muted/40 rounded-xl flex-1"
           />
+          {onOpenSearchModal && (
+            <button
+              type="button"
+              onClick={onOpenSearchModal}
+              title="Global Search (Ctrl+K)"
+              className="p-1.5 rounded-xl border border-border/80 bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground text-[10px] font-mono flex items-center justify-center flex-shrink-0"
+            >
+              ⌘K
+            </button>
+          )}
         </div>
 
         {/* Scrollable Navigation List */}
@@ -148,29 +173,30 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
                 {chatRequests.map((req) => (
                   <div
                     key={req.from}
-                    className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-2"
+                    className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-2 animate-fade-in"
                   >
-                    <div className="font-semibold text-foreground flex items-center gap-1.5">
-                      <UserPlus className="w-3.5 h-3.5 text-amber-500" />
-                      <span>@{req.from}</span>
-                      <span className="text-muted-foreground font-normal">wants to chat</span>
-                    </div>
                     <div className="flex items-center gap-2">
+                      <Avatar name={req.from} size="xs" />
+                      <span className="font-semibold text-foreground">@{req.from}</span>
+                      <span className="text-[11px] text-muted-foreground">wants to chat</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 justify-end">
                       <Button
                         size="xs"
-                        variant="primary"
-                        className="flex-1 h-6 text-[11px]"
-                        onClick={() => respondChatRequest(req.from, true)}
+                        variant="ghost"
+                        onClick={() => respondChatRequest(req.from, false)}
+                        className="text-[11px] h-6 px-2 hover:bg-muted"
                       >
-                        Accept
+                        Decline
                       </Button>
                       <Button
                         size="xs"
-                        variant="outline"
-                        className="flex-1 h-6 text-[11px]"
-                        onClick={() => respondChatRequest(req.from, false)}
+                        variant="primary"
+                        onClick={() => respondChatRequest(req.from, true)}
+                        className="text-[11px] h-6 px-2.5"
                       >
-                        Decline
+                        Accept
                       </Button>
                     </div>
                   </div>
@@ -179,20 +205,20 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
             </div>
           )}
 
-          {/* Public Channels Section */}
+          {/* Channels / Group section */}
           <div className="space-y-1">
             <div className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider px-2 mb-2 flex items-center justify-between">
-              <span>Channels</span>
-              <span className="text-[10px] font-normal text-muted-foreground">Public</span>
+              <span>Public Channels</span>
+              <span className="text-[10px] font-medium text-indigo-400">48h retention</span>
             </div>
 
             <button
               type="button"
               onClick={() => handleSelectChat('group')}
               className={cn(
-                'w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-medium transition-all',
+                'w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-medium transition-all group',
                 currentChat === 'group'
-                  ? 'bg-primary text-primary-foreground shadow-glow'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-glow'
                   : 'hover:bg-muted text-foreground'
               )}
             >
@@ -209,6 +235,9 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
               </div>
 
               <div className="flex items-center gap-1.5">
+                {mutedChats.includes('group') && (
+                  <BellOff className="w-3 h-3 text-amber-400" title="Notifications muted" />
+                )}
                 {unreadCounts['group'] > 0 && currentChat !== 'group' && (
                   <Badge variant="glow" className="px-1.5 py-0 text-[10px]">
                     {unreadCounts['group']}
@@ -249,6 +278,8 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
               filteredUsers.map((partner) => {
                 const isSelected = currentChat === partner;
                 const unread = unreadCounts[partner] || 0;
+                const partnerProfile = userProfiles[partner];
+                const isMuted = mutedChats.includes(partner);
 
                 return (
                   <div
@@ -262,21 +293,32 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
                     onClick={() => handleSelectChat(partner)}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <Avatar name={partner} size="sm" status="online" />
+                      <Avatar
+                        src={partnerProfile?.avatarUrl}
+                        name={partner}
+                        size="sm"
+                        status="online"
+                      />
                       <div className="truncate text-left">
                         <div className="font-semibold truncate leading-none">@{partner}</div>
                         <div
                           className={cn(
                             'text-[10px] mt-0.5 truncate',
-                            isSelected ? 'text-primary-foreground/80' : 'text-emerald-500 font-medium'
+                            isSelected
+                              ? 'text-primary-foreground/80'
+                              : 'text-emerald-500 font-medium'
                           )}
                         >
-                          Active now
+                          {partnerProfile?.statusText || 'Active now'}
                         </div>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-1.5">
+                      {isMuted && (
+                        <BellOff className="w-3 h-3 text-amber-400" title="Muted" />
+                      )}
+
                       {unread > 0 && !isSelected && (
                         <Badge variant="glow" className="px-1.5 py-0 text-[10px]">
                           {unread}
@@ -308,17 +350,22 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
         {/* Bottom User Profile Section */}
         <div className="p-3 border-t border-sidebar-border/60 bg-muted/20 flex items-center justify-between">
           <div
-            className="flex items-center gap-2.5 min-w-0 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => setSettingsOpen(true)}
-            title="Open Preferences & Account"
+            className="flex items-center gap-2.5 min-w-0 cursor-pointer hover:opacity-85 transition-opacity"
+            onClick={handleOpenMyProfile}
+            title="Edit profile & account settings"
           >
-            <Avatar name={user?.username || 'You'} size="sm" status="online" />
+            <Avatar
+              src={user?.avatarUrl}
+              name={user?.username || 'You'}
+              size="sm"
+              status="online"
+            />
             <div className="min-w-0">
               <div className="font-bold text-xs truncate leading-none text-foreground">
                 @{user?.username}
               </div>
               <div className="text-[10px] text-muted-foreground mt-0.5 truncate flex items-center gap-1">
-                <span>Account settings</span>
+                <span>{user?.statusText || 'Edit profile'}</span>
               </div>
             </div>
           </div>
@@ -327,8 +374,8 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
             <Button
               size="icon-sm"
               variant="ghost"
-              onClick={() => setSettingsOpen(true)}
-              title="Preferences"
+              onClick={handleOpenMyProfile}
+              title="Profile & Settings"
               className="text-muted-foreground hover:text-foreground"
             >
               <Settings className="w-4 h-4" />
@@ -347,8 +394,12 @@ export function Sidebar({ className, onCloseMobile, onBackToHome }) {
         </div>
       </aside>
 
-      {/* Settings Modal */}
-      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+      {/* User Profile Modal */}
+      <UserProfileModal
+        open={profileModalOpen}
+        onOpenChange={setProfileModalOpen}
+        targetUsername={inspectedUser}
+      />
     </>
   );
 }

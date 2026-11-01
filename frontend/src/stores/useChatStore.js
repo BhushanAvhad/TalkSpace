@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import socket from '@/socket/socket';
 
 const SOUND_PREF_KEY = 'talkspace-sound-enabled';
+const MUTED_CHATS_KEY = 'talkspace-muted-chats';
 
 let notificationAudio = null;
 if (typeof window !== 'undefined') {
@@ -18,6 +19,11 @@ export const useChatStore = create((set, get) => {
       ? localStorage.getItem(SOUND_PREF_KEY) !== 'false'
       : true;
 
+  const initialMuted =
+    typeof window !== 'undefined'
+      ? JSON.parse(localStorage.getItem(MUTED_CHATS_KEY) || '[]')
+      : [];
+
   return {
     currentChat: 'group', // 'group' or username
     activeUsers: [],
@@ -27,13 +33,33 @@ export const useChatStore = create((set, get) => {
     typingUser: null, // username typing, or null
     searchQuery: '',
     soundEnabled: initialSound,
+    mutedChats: initialMuted, // Array<string>
     unreadCounts: {}, // { [chatKey]: number }
-    messageReactions: {}, // { [messageId]: { [emoji]: count } }
+    messageReactions: {}, // { [messageId]: { [emoji]: Array<username> } }
     connectionStatus: 'connected', // 'connected' | 'connecting' | 'disconnected'
     sharedMediaOpen: false,
 
+    // Phase 6: Replies, Editing, Search, and Read Receipts
+    replyingTo: null, // { messageId, user, text, fileURL, fileName } | null
+    editingMessage: null, // { messageId, text } | null
+    searchModalOpen: false,
+    searchResults: { query: '', messages: [], users: [] },
+    isSearching: false,
+    readReceipts: {}, // { [partner]: timestamp }
+    userProfiles: {}, // { [username]: { avatarUrl, statusText, bio } }
+
     setSharedMediaOpen: (open) => set({ sharedMediaOpen: open }),
     toggleSharedMedia: () => set((state) => ({ sharedMediaOpen: !state.sharedMediaOpen })),
+
+    setSearchModalOpen: (open) => set({ searchModalOpen: open }),
+    setSearchResults: (results) => set({ searchResults: results, isSearching: false }),
+    setIsSearching: (isSearching) => set({ isSearching }),
+
+    setReplyingTo: (msg) => set({ replyingTo: msg, editingMessage: null }),
+    clearReplyingTo: () => set({ replyingTo: null }),
+
+    setEditingMessage: (msg) => set({ editingMessage: msg, replyingTo: null }),
+    clearEditingMessage: () => set({ editingMessage: null }),
 
     setConnectionStatus: (status) => set({ connectionStatus: status }),
 
@@ -47,17 +73,37 @@ export const useChatStore = create((set, get) => {
       });
     },
 
+    toggleMuteChat: (chatName) => {
+      set((state) => {
+        const isMuted = state.mutedChats.includes(chatName);
+        const updated = isMuted
+          ? state.mutedChats.filter((c) => c !== chatName)
+          : [...state.mutedChats, chatName];
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(MUTED_CHATS_KEY, JSON.stringify(updated));
+        }
+        return { mutedChats: updated };
+      });
+    },
+
     setSearchQuery: (query) => set({ searchQuery: query }),
 
     setCurrentChat: (chat) => {
       set((state) => ({
         currentChat: chat,
         typingUser: null,
+        replyingTo: null,
+        editingMessage: null,
         unreadCounts: {
           ...state.unreadCounts,
           [chat]: 0,
         },
       }));
+
+      // Notify partner that messages are read
+      if (chat !== 'group' && socket.connected) {
+        socket.emit('markMessagesRead', { partner: chat });
+      }
 
       if (chat === 'group') {
         socket.emit('requestGroupHistory');
@@ -80,17 +126,20 @@ export const useChatStore = create((set, get) => {
 
     addMessage: (msg, currentUsername) => {
       const isIncoming = msg.user !== currentUsername;
-      const { soundEnabled, currentChat } = get();
+      const { soundEnabled, currentChat, mutedChats } = get();
 
-      // Trigger audio if message is incoming and sound is enabled
-      if (isIncoming && soundEnabled && notificationAudio) {
+      const sourceChat = msg.type === 'group' ? 'group' : msg.user;
+      const isMuted = mutedChats.includes(sourceChat);
+
+      // Trigger audio if message is incoming, sound enabled, and chat not muted
+      if (isIncoming && soundEnabled && !isMuted && notificationAudio) {
         notificationAudio.play().catch(() => {});
       }
 
       if (msg.type === 'group') {
         set((state) => {
           if (state.groupMessages.some((m) => m.messageId === msg.messageId)) return state;
-          
+
           const isBackground = state.currentChat !== 'group' && isIncoming;
           const currentCount = state.unreadCounts['group'] || 0;
 
@@ -124,20 +173,110 @@ export const useChatStore = create((set, get) => {
       }
     },
 
-    toggleReaction: (messageId, emoji) => {
+    // Real-Time Socket Event Handlers for Phase 6
+    onMessageEdited: ({ messageId, newText, isEdited, editedAt }) => {
       set((state) => {
-        const msgReactions = state.messageReactions[messageId] || {};
-        const count = msgReactions[emoji] || 0;
+        const updateList = (list) =>
+          list.map((m) =>
+            m.messageId === messageId
+              ? { ...m, message: newText, isEdited: true, editedAt }
+              : m
+          );
+
+        const newPrivate = {};
+        for (const [k, v] of Object.entries(state.privateMessages)) {
+          newPrivate[k] = updateList(v);
+        }
+
         return {
+          groupMessages: updateList(state.groupMessages),
+          privateMessages: newPrivate,
+        };
+      });
+    },
+
+    onMessageDeleted: ({ messageId }) => {
+      set((state) => {
+        const updateList = (list) =>
+          list.map((m) =>
+            m.messageId === messageId
+              ? {
+                  ...m,
+                  isDeleted: true,
+                  message: 'This message was deleted',
+                  fileURL: null,
+                  fileName: null,
+                }
+              : m
+          );
+
+        const newPrivate = {};
+        for (const [k, v] of Object.entries(state.privateMessages)) {
+          newPrivate[k] = updateList(v);
+        }
+
+        return {
+          groupMessages: updateList(state.groupMessages),
+          privateMessages: newPrivate,
+        };
+      });
+    },
+
+    onReactionUpdated: ({ messageId, reactions }) => {
+      set((state) => {
+        const updateList = (list) =>
+          list.map((m) => (m.messageId === messageId ? { ...m, reactions } : m));
+
+        const newPrivate = {};
+        for (const [k, v] of Object.entries(state.privateMessages)) {
+          newPrivate[k] = updateList(v);
+        }
+
+        return {
+          groupMessages: updateList(state.groupMessages),
+          privateMessages: newPrivate,
           messageReactions: {
             ...state.messageReactions,
-            [messageId]: {
-              ...msgReactions,
-              [emoji]: count > 0 ? 0 : 1, // toggle on/off
-            },
+            [messageId]: reactions,
           },
         };
       });
+    },
+
+    onConversationRead: ({ partner, timestamp }) => {
+      set((state) => ({
+        readReceipts: {
+          ...state.readReceipts,
+          [partner]: timestamp,
+        },
+      }));
+    },
+
+    setUserProfileCache: (username, profile) => {
+      set((state) => ({
+        userProfiles: {
+          ...state.userProfiles,
+          [username]: profile,
+        },
+      }));
+    },
+
+    // User Actions
+    toggleReaction: (messageId, emoji) => {
+      if (socket.connected) {
+        socket.emit('toggleReaction', { messageId, emoji });
+      }
+    },
+
+    editMessage: (messageId, newText) => {
+      if (!newText || !newText.trim() || !socket.connected) return;
+      socket.emit('editMessage', { messageId, newText: newText.trim() });
+      get().clearEditingMessage();
+    },
+
+    deleteMessage: (messageId) => {
+      if (!messageId || !socket.connected) return;
+      socket.emit('deleteMessage', { messageId });
     },
 
     setTypingUser: (user) => set({ typingUser: user }),
@@ -155,7 +294,7 @@ export const useChatStore = create((set, get) => {
 
     sendTextMessage: (text, currentUsername) => {
       if (!text || !text.trim()) return;
-      const { currentChat } = get();
+      const { currentChat, replyingTo } = get();
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
       const msgData = {
@@ -165,6 +304,18 @@ export const useChatStore = create((set, get) => {
         profilePicture: 'profile.png',
         type: currentChat === 'group' ? 'group' : 'private',
         timestamp: new Date().toISOString(),
+        replyTo: replyingTo
+          ? {
+              messageId: replyingTo.messageId,
+              user: replyingTo.user,
+              text: replyingTo.message || '',
+              fileURL: replyingTo.fileURL || null,
+              fileName: replyingTo.fileName || null,
+            }
+          : null,
+        isEdited: false,
+        isDeleted: false,
+        reactions: {},
       };
 
       if (currentChat === 'group') {
@@ -175,10 +326,12 @@ export const useChatStore = create((set, get) => {
         socket.emit('privateMessage', msgData);
         get().addMessage(msgData, currentUsername);
       }
+
+      get().clearReplyingTo();
     },
 
     sendFileMessage: (fileData, currentUsername, customCaption = '') => {
-      const { currentChat } = get();
+      const { currentChat, replyingTo } = get();
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
       const msgData = {
@@ -192,6 +345,18 @@ export const useChatStore = create((set, get) => {
         profilePicture: 'profile.png',
         type: currentChat === 'group' ? 'group' : 'private',
         timestamp: new Date().toISOString(),
+        replyTo: replyingTo
+          ? {
+              messageId: replyingTo.messageId,
+              user: replyingTo.user,
+              text: replyingTo.message || '',
+              fileURL: replyingTo.fileURL || null,
+              fileName: replyingTo.fileName || null,
+            }
+          : null,
+        isEdited: false,
+        isDeleted: false,
+        reactions: {},
       };
 
       if (currentChat === 'group') {
@@ -202,6 +367,8 @@ export const useChatStore = create((set, get) => {
         socket.emit('privateMessage', msgData);
         get().addMessage(msgData, currentUsername);
       }
+
+      get().clearReplyingTo();
     },
 
     emitTyping: () => {
@@ -224,4 +391,3 @@ export const useChatStore = create((set, get) => {
 });
 
 export default useChatStore;
-
