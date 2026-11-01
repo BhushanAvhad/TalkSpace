@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light Mode Tokens */
+    --background: 210 40% 98%;          /* Soft slate neutral #f8fafc */
+    --foreground: 222 47% 11%;          /* High contrast slate #0f172a */
+
+    --card: 0 0% 100%;                  /* Pure white card #ffffff */
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 246 80% 60%;             /* Electric Indigo #6366f1 */
+    --primary-foreground: 210 40% 98%;
+    --primary-hover: 248 83% 54%;
+
+    --secondary: 214 32% 91%;           /* Slate #e2e8f0 */
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%; /* Slate muted #64748b */
+
+    --accent: 250 84% 96%;              /* Light violet tint */
+    --accent-foreground: 246 80% 50%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;        /* Light subtle border */
+    --input: 214.3 31.8% 91.4%;
+    --ring: 246 80% 60%;
+
+    --radius: 0.75rem;                  /* 12px smooth border-radius */
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-border: 214.3 31.8% 91.4%;
+    --sidebar-active: 246 80% 96%;
+  }
+
+  .dark {
+    /* Dark Mode Tokens - Deep Graphite & Layered Charcoal */
+    --background: 224 35% 6%;           /* Deep graphite #0a0d14 */
+    --foreground: 210 40% 98%;          /* Pure readable text #f8fafc */
+
+    --card: 223 30% 10%;                /* Layered charcoal surface #111520 */
+    --card-foreground: 210 40% 98%;
+
+    --popover: 223 30% 10%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 246 80% 65%;             /* Vibrant Violet-Indigo #6366f1 */
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 246 85% 72%;
+
+    --secondary: 222 25% 15%;           /* Subtle dark secondary */
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 223 25% 14%;
+    --muted-foreground: 217.9 10.6% 64.9%; /* Crisp muted slate */
+
+    --accent: 246 60% 18%;              /* Dark violet sheen */
+    --accent-foreground: 246 80% 75%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 222 25% 18%;              /* Refined graphite border #1c2233 */
+    --input: 222 25% 18%;
+    --ring: 246 80% 65%;
+
+    --sidebar-background: 225 35% 7.5%; /* Charcoal sidebar #0d1019 */
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-border: 222 25% 15%;
+    --sidebar-active: 246 45% 18%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased font-sans transition-colors duration-200;
+    overflow-x: hidden;
+  }
+}
+
+/* Custom scrollbars matching the design system */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/20 rounded-full hover:bg-muted-foreground/40 transition-colors;
+}
+
