@@ -45,6 +45,8 @@ export function MessageBubble({ message, isMe }) {
     isEdited,
     isDeleted,
     reactions = {},
+    avatarUrl,
+    profilePicture,
   } = message;
 
   const [copied, setCopied] = useState(false);
@@ -133,7 +135,12 @@ export function MessageBubble({ message, isMe }) {
     >
       {/* Avatar (for incoming messages) */}
       {!isMe && (
-        <Avatar name={user} size="sm" className="mt-1 flex-shrink-0" />
+        <Avatar
+          name={user}
+          src={avatarUrl || profilePicture}
+          size="sm"
+          className="mt-1 flex-shrink-0"
+        />
       )}
 
       {/* Bubble Container */}

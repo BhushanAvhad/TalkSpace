@@ -253,12 +253,45 @@ export const useChatStore = create((set, get) => {
     },
 
     setUserProfileCache: (username, profile) => {
-      set((state) => ({
-        userProfiles: {
-          ...state.userProfiles,
-          [username]: profile,
-        },
-      }));
+      set((state) => {
+        const existing = state.userProfiles[username];
+        if (
+          existing &&
+          existing.avatarUrl === profile.avatarUrl &&
+          existing.statusText === profile.statusText &&
+          existing.bio === profile.bio
+        ) {
+          return state; // Prevent unnecessary re-render loop
+        }
+        return {
+          userProfiles: {
+            ...state.userProfiles,
+            [username]: profile,
+          },
+        };
+      });
+    },
+
+    setUserProfilesBatch: (profilesList) => {
+      set((state) => {
+        const next = { ...state.userProfiles };
+        let hasChanges = false;
+        profilesList.forEach((p) => {
+          if (!p.username) return;
+          const existing = next[p.username];
+          if (
+            !existing ||
+            existing.avatarUrl !== p.avatarUrl ||
+            existing.statusText !== p.statusText ||
+            existing.bio !== p.bio
+          ) {
+            next[p.username] = p;
+            hasChanges = true;
+          }
+        });
+        if (!hasChanges) return state;
+        return { userProfiles: next };
+      });
     },
 
     // User Actions

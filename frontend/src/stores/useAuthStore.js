@@ -12,14 +12,21 @@ export const useAuthStore = create((set, get) => ({
       user: userData ? { ...state.user, ...userData } : null,
       isAuthenticated: !!userData,
       authError: null,
-      isLoading: false
+      isLoading: false,
     }));
   },
 
   updateProfile: (profileData) => {
-    if (socket.connected) {
-      socket.emit('updateProfile', profileData);
-    }
+    set((state) => {
+      if (!state.user) return state;
+      const updatedUser = {
+        ...state.user,
+        ...(profileData.avatarUrl !== undefined && { avatarUrl: profileData.avatarUrl }),
+        ...(profileData.statusText !== undefined && { statusText: profileData.statusText }),
+        ...(profileData.bio !== undefined && { bio: profileData.bio }),
+      };
+      return { user: updatedUser };
+    });
   },
 
   setAuthError: (error) => set({ authError: error, isLoading: false }),
@@ -45,4 +52,3 @@ export const useAuthStore = create((set, get) => ({
 }));
 
 export default useAuthStore;
-

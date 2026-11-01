@@ -15,6 +15,8 @@ import {
   Loader2,
   Smile,
   X,
+  Trash2,
+  Upload,
 } from 'lucide-react';
 import {
   Dialog,
@@ -39,6 +41,15 @@ const STATUS_PRESETS = [
   '🎯 Deep work / Focus',
   '☕ Taking a quick break',
   '🌴 Out of office',
+];
+
+const AVATAR_PRESETS = [
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Felix',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Aneka',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Milo',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Gizmo',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Sparky',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Buster',
 ];
 
 export function UserProfileModal({ open, onOpenChange, targetUsername }) {
@@ -67,7 +78,7 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
 
   const fileInputRef = useRef(null);
 
-  // Initialize or fetch profile
+  // Initialize profile when modal opens
   useEffect(() => {
     if (!open) return;
 
@@ -76,7 +87,6 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
       setStatusText(currentUser?.statusText || '');
       setBio(currentUser?.bio || '');
     } else {
-      // Check cached profile or request from server
       const cached = userProfiles[username];
       if (cached) {
         setAvatarUrl(cached.avatarUrl || '');
@@ -86,7 +96,18 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
         socket.emit('getUserProfile', { username });
       }
     }
-  }, [open, isMe, username, currentUser, userProfiles]);
+  }, [open, isMe, username]);
+
+  // If viewing peer and their profile arrives from server, update view
+  useEffect(() => {
+    if (!open || isMe || !username) return;
+    const cached = userProfiles[username];
+    if (cached) {
+      setAvatarUrl(cached.avatarUrl || '');
+      setStatusText(cached.statusText || '');
+      setBio(cached.bio || '');
+    }
+  }, [open, isMe, username, userProfiles[username]?.avatarUrl, userProfiles[username]?.statusText, userProfiles[username]?.bio]);
 
   // Handle avatar image file upload
   const handleAvatarFileSelect = async (e) => {
@@ -94,17 +115,18 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      toast.error('Please select an image file (PNG, JPG, WEBP)');
+      toast.error('Please select a valid image file (PNG, JPG, WEBP, GIF)');
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('Avatar file must be under 5 MB');
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('Avatar file must be under 10 MB');
       return;
     }
 
     const formData = new FormData();
     formData.append('profilePic', file);
+    formData.append('file', file);
     formData.append('username', currentUser?.username || '');
 
     setIsUploading(true);
@@ -114,21 +136,81 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
         body: formData,
       });
 
+      if (!res.ok) {
+        throw new Error(`Upload failed with status ${res.status}`);
+      }
+
       const data = await res.json();
-      if (data.success && data.avatarUrl) {
-        setAvatarUrl(data.avatarUrl);
-        toast.success('Avatar uploaded successfully!');
+      const newUrl = data.avatarUrl || data.fileURL;
+
+      if (newUrl) {
+        setAvatarUrl(newUrl);
+
+        // Instantly save to profile and notify peers
+        socket.emit('updateProfile', {
+          avatarUrl: newUrl,
+          statusText: statusText.trim(),
+          bio: bio.trim(),
+        });
+
+        updateProfile({
+          avatarUrl: newUrl,
+          statusText: statusText.trim(),
+          bio: bio.trim(),
+        });
+
+        toast.success('Profile image updated successfully!');
       } else {
-        toast.error(data.error || 'Failed to upload avatar');
+        toast.error(data.error || 'Failed to process avatar');
       }
     } catch (err) {
+      console.error('Avatar upload error:', err);
       toast.error('Avatar upload failed: ' + err.message);
     } finally {
       setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  // Save profile changes
+  // Handle choosing a preset avatar
+  const handleSelectPresetAvatar = (presetUrl) => {
+    setAvatarUrl(presetUrl);
+
+    socket.emit('updateProfile', {
+      avatarUrl: presetUrl,
+      statusText: statusText.trim(),
+      bio: bio.trim(),
+    });
+
+    updateProfile({
+      avatarUrl: presetUrl,
+      statusText: statusText.trim(),
+      bio: bio.trim(),
+    });
+
+    toast.success('Avatar updated to preset!');
+  };
+
+  // Remove avatar (reset to initials)
+  const handleRemoveAvatar = () => {
+    setAvatarUrl('');
+
+    socket.emit('updateProfile', {
+      avatarUrl: '',
+      statusText: statusText.trim(),
+      bio: bio.trim(),
+    });
+
+    updateProfile({
+      avatarUrl: '',
+      statusText: statusText.trim(),
+      bio: bio.trim(),
+    });
+
+    toast.info('Avatar removed. Initials will be displayed.');
+  };
+
+  // Save profile changes (Status and Bio)
   const handleSaveProfile = () => {
     setIsSaving(true);
     socket.emit('updateProfile', {
@@ -145,9 +227,9 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
 
     setTimeout(() => {
       setIsSaving(false);
-      toast.success('Profile updated successfully!');
+      toast.success('Profile saved successfully!');
       onOpenChange(false);
-    }, 400);
+    }, 300);
   };
 
   const handleStartDM = () => {
@@ -171,7 +253,7 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
                   {isMe ? 'My Profile & Preferences' : `@${username}'s Profile`}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground">
-                  {isMe ? 'Manage your public persona and app settings' : 'View user details'}
+                  {isMe ? 'Personalize your avatar, status, and app settings' : 'View user details'}
                 </DialogDescription>
               </div>
             </div>
@@ -209,61 +291,128 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
 
         {activeTab === 'profile' ? (
           <div className="space-y-4 pt-3">
-            {/* Avatar Row */}
-            <div className="flex items-center gap-4 p-3.5 rounded-2xl bg-muted/30 border border-border/60">
-              <div className="relative group">
-                <Avatar
-                  src={avatarUrl}
-                  name={username}
-                  size="lg"
-                  status="online"
-                  className="ring-2 ring-primary/20 shadow-glow"
-                />
-                {isMe && (
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isUploading}
-                    className="absolute inset-0 bg-black/50 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
-                    title="Change profile picture"
-                  >
-                    {isUploading ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Camera className="w-5 h-5" />
-                    )}
-                  </button>
-                )}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleAvatarFileSelect}
-                />
+            {/* Avatar Section */}
+            <div className="p-3.5 rounded-2xl bg-muted/30 border border-border/60 space-y-3">
+              <div className="flex items-center gap-4">
+                {/* Avatar Display */}
+                <div
+                  className={cn(
+                    'relative group flex-shrink-0',
+                    isMe && 'cursor-pointer'
+                  )}
+                  onClick={() => isMe && fileInputRef.current?.click()}
+                  title={isMe ? 'Click to upload a new photo' : `@${username}`}
+                >
+                  <Avatar
+                    src={avatarUrl}
+                    name={username}
+                    size="xl"
+                    status="online"
+                    className="ring-2 ring-primary/30 shadow-glow"
+                  />
+                  {isMe && (
+                    <div className="absolute inset-0 bg-black/50 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      {isUploading ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <Camera className="w-5 h-5" />
+                      )}
+                    </div>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleAvatarFileSelect}
+                  />
+                </div>
+
+                {/* Name & Avatar Action Buttons */}
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div>
+                    <div className="font-bold text-base text-foreground truncate">
+                      @{username}
+                    </div>
+                    <div className="text-xs text-muted-foreground flex items-center gap-1.5 mt-0.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                      <span>Online &bull; Realtime</span>
+                    </div>
+                  </div>
+
+                  {/* Explicit Upload and Remove buttons */}
+                  {isMe && (
+                    <div className="flex items-center gap-1.5 pt-1">
+                      <Button
+                        size="xs"
+                        variant="primary"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="h-7 text-[11px] gap-1 px-2.5"
+                      >
+                        {isUploading ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Upload className="w-3 h-3" />
+                        )}
+                        <span>{isUploading ? 'Uploading...' : 'Upload Photo'}</span>
+                      </Button>
+
+                      {avatarUrl && (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={handleRemoveAvatar}
+                          className="h-7 text-[11px] gap-1 px-2 text-muted-foreground hover:text-destructive"
+                          title="Remove custom avatar and show initials"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Remove</span>
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="min-w-0 flex-1">
-                <div className="font-bold text-base text-foreground truncate">
-                  @{username}
-                </div>
-                <div className="text-xs text-muted-foreground flex items-center gap-1.5 mt-0.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-                  <span>Realtime &bull; PBKDF2</span>
-                </div>
-                {isMe && (
-                  <div className="text-[11px] text-muted-foreground mt-1">
-                    Click avatar to upload photo
+              {/* Avatar Presets (Quick selection) */}
+              {isMe && (
+                <div className="pt-2 border-t border-border/40 space-y-1.5">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-indigo-400" />
+                    <span>Or choose an avatar style:</span>
                   </div>
-                )}
-              </div>
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                    {AVATAR_PRESETS.map((preset, index) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => handleSelectPresetAvatar(preset)}
+                        className={cn(
+                          'w-9 h-9 rounded-full overflow-hidden border-2 transition-transform hover:scale-110 flex-shrink-0 bg-muted/60',
+                          avatarUrl === preset
+                            ? 'border-indigo-500 ring-2 ring-indigo-500/30'
+                            : 'border-border/60 hover:border-indigo-400'
+                        )}
+                        title={`Select Avatar Style ${index + 1}`}
+                      >
+                        <img
+                          src={preset}
+                          alt={`Preset ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Status Field */}
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-foreground flex items-center justify-between">
-                <span>Status</span>
-                {isMe && <span className="text-[10px] text-muted-foreground">What's on your mind?</span>}
+                <span>Status Message</span>
+                {isMe && <span className="text-[10px] text-muted-foreground">Broadcast to teammates</span>}
               </label>
 
               {isMe ? (
@@ -330,14 +479,14 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
                     variant="outline"
                     onClick={() => onOpenChange(false)}
                   >
-                    Cancel
+                    Close
                   </Button>
                   <Button
                     size="sm"
                     variant="primary"
                     onClick={handleSaveProfile}
                     disabled={isSaving}
-                    className="gap-1.5"
+                    className="gap-1.5 shadow-glow"
                   >
                     {isSaving ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -352,7 +501,7 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
                   size="sm"
                   variant="primary"
                   onClick={handleStartDM}
-                  className="gap-1.5 w-full"
+                  className="gap-1.5 w-full shadow-glow"
                 >
                   <MessageSquare className="w-4 h-4" />
                   <span>Send Direct Message</span>
@@ -485,4 +634,3 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
 }
 
 export default UserProfileModal;
-

@@ -137,6 +137,7 @@ function formatMessageRow(row) {
     let editedAt = null;
     let isDeleted = false;
     let reactions = {};
+    let profilePicture = null;
 
     if (typeof row.message === 'string' && row.message.trim().startsWith('{')) {
         try {
@@ -151,6 +152,7 @@ function formatMessageRow(row) {
             editedAt = parsed.editedAt || null;
             isDeleted = !!parsed.isDeleted;
             reactions = parsed.reactions || {};
+            profilePicture = parsed.profilePicture || parsed.avatarUrl || null;
         } catch (e) {
             // Keep original row.message if not valid JSON
         }
@@ -172,7 +174,8 @@ function formatMessageRow(row) {
         editedAt,
         isDeleted,
         reactions,
-        profilePicture: 'profile.png'
+        profilePicture,
+        avatarUrl: profilePicture
     };
 }
 
@@ -266,14 +269,16 @@ app.post('/upload', (req, res) => {
 
 // Profile Picture Upload Endpoint
 app.post('/uploadProfilePic', (req, res) => {
-    upload.single('file')(req, res, (err) => {
+    upload.any()(req, res, (err) => {
         if (err) {
             return res.status(400).json({ error: err.message || 'Avatar upload failed.' });
         }
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded.' });
+        const file = req.file || (req.files && req.files[0]);
+        if (!file) {
+            return res.status(400).json({ error: 'No image file uploaded.' });
         }
-        res.json({ fileURL: `/api/files/${req.file.filename}` });
+        const avatarUrl = `/api/files/${file.filename}`;
+        res.json({ success: true, avatarUrl, fileURL: avatarUrl });
     });
 });
 
@@ -553,6 +558,8 @@ io.on('connection', (socket) => {
         if (sender === msg.user && !sentMessageIds.has(messageId)) {
             sentMessageIds.add(messageId);
 
+            const currentProfileImg = users.get(socket.id)?.profileImage || msg.avatarUrl || msg.profilePicture || null;
+
             const messageData = {
                 user: msg.user,
                 message: msg.message || '',
@@ -567,7 +574,8 @@ io.on('connection', (socket) => {
                 isEdited: false,
                 isDeleted: false,
                 reactions: {},
-                profilePicture: users.get(socket.id)?.profileImage || 'profile.png',
+                profilePicture: currentProfileImg,
+                avatarUrl: currentProfileImg,
             };
 
             const messageToSave = JSON.stringify({
@@ -579,7 +587,9 @@ io.on('connection', (socket) => {
                 replyTo: msg.replyTo || null,
                 isEdited: false,
                 isDeleted: false,
-                reactions: {}
+                reactions: {},
+                profilePicture: currentProfileImg,
+                avatarUrl: currentProfileImg
             });
 
             try {
@@ -623,7 +633,8 @@ io.on('connection', (socket) => {
                 isEdited: false,
                 isDeleted: false,
                 reactions: {},
-                profilePicture: users.get(socket.id)?.profileImage || 'profile.png',
+                profilePicture: users.get(socket.id)?.profileImage || msg.avatarUrl || null,
+                avatarUrl: users.get(socket.id)?.profileImage || msg.avatarUrl || null,
             };
 
             const messageToSave = JSON.stringify({
@@ -635,7 +646,9 @@ io.on('connection', (socket) => {
                 replyTo: msg.replyTo || null,
                 isEdited: false,
                 isDeleted: false,
-                reactions: {}
+                reactions: {},
+                profilePicture: users.get(socket.id)?.profileImage || msg.avatarUrl || null,
+                avatarUrl: users.get(socket.id)?.profileImage || msg.avatarUrl || null
             });
 
             try {

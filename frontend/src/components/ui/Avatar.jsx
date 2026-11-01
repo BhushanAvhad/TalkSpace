@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 
 export function Avatar({
@@ -11,6 +11,11 @@ export function Avatar({
   ...props
 }) {
   const [hasError, setHasError] = useState(false);
+
+  // Reset error state only when src actually changes value
+  useEffect(() => {
+    setHasError(false);
+  }, [src]);
 
   const sizeMap = {
     xs: { wrap: 'w-6 h-6 text-[10px]', dot: 'w-2 h-2 ring-1' },
@@ -38,6 +43,16 @@ export function Avatar({
 
   const currentSize = sizeMap[size] || sizeMap.md;
 
+  // Filter out empty or placeholder 'profile.png' that causes 404s
+  const cleanSrc =
+    src &&
+    typeof src === 'string' &&
+    src.trim() !== '' &&
+    src !== 'profile.png' &&
+    src !== '/profile.png'
+      ? src
+      : null;
+
   return (
     <div className={cn('relative inline-flex flex-shrink-0 select-none', className)} {...props}>
       <div
@@ -46,15 +61,17 @@ export function Avatar({
           currentSize.wrap
         )}
       >
-        {src && !hasError ? (
+        {cleanSrc && !hasError ? (
           <img
-            src={src}
-            alt={alt}
+            key={cleanSrc}
+            src={cleanSrc}
+            alt={alt || name}
+            loading="eager"
             onError={() => setHasError(true)}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover select-none"
           />
         ) : (
-          <span className="tracking-wider">{getInitials(name || alt)}</span>
+          <span className="tracking-wider select-none">{getInitials(name || alt)}</span>
         )}
       </div>
 
@@ -73,4 +90,3 @@ export function Avatar({
 }
 
 export default Avatar;
-

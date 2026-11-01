@@ -32,6 +32,7 @@ export function App() {
     onReactionUpdated,
     onConversationRead,
     setUserProfileCache,
+    setUserProfilesBatch,
   } = useChatStore();
 
   // 'landing' | 'auth' | 'chat'
@@ -80,11 +81,23 @@ export function App() {
     };
 
     const handleMessage = (msg) => {
-      addMessage(msg, user?.username);
+      addMessage(msg, useAuthStore.getState().user?.username);
     };
 
     const handleUpdateUsers = (users) => {
       setActiveUsers(users);
+    };
+
+    const handleUpdateUsersDetailed = (usersList) => {
+      if (Array.isArray(usersList)) {
+        const batch = usersList.map((u) => ({
+          username: u.username,
+          avatarUrl: u.profileImage || u.avatarUrl || null,
+          statusText: u.statusText || 'Available',
+          bio: u.bio || '',
+        }));
+        setUserProfilesBatch(batch);
+      }
     };
 
     const handleLoadGroupHistory = (history) => {
@@ -141,8 +154,10 @@ export function App() {
     };
 
     const handleUserProfileChanged = (profile) => {
+      if (!profile?.username) return;
       setUserProfileCache(profile.username, profile);
-      if (profile.username === user?.username) {
+      const myUser = useAuthStore.getState().user;
+      if (profile.username === myUser?.username) {
         updateProfile(profile);
       }
     };
@@ -159,6 +174,7 @@ export function App() {
     socket.on('authResult', handleAuthResult);
     socket.on('message', handleMessage);
     socket.on('updateUsers', handleUpdateUsers);
+    socket.on('updateUsersDetailed', handleUpdateUsersDetailed);
     socket.on('loadGroupHistory', handleLoadGroupHistory);
     socket.on('loadPrivateHistory', handleLoadPrivateHistory);
     socket.on('chatRequest', handleChatRequest);
@@ -180,6 +196,7 @@ export function App() {
       socket.off('authResult', handleAuthResult);
       socket.off('message', handleMessage);
       socket.off('updateUsers', handleUpdateUsers);
+      socket.off('updateUsersDetailed', handleUpdateUsersDetailed);
       socket.off('loadGroupHistory', handleLoadGroupHistory);
       socket.off('loadPrivateHistory', handleLoadPrivateHistory);
       socket.off('chatRequest', handleChatRequest);
@@ -194,7 +211,7 @@ export function App() {
       socket.off('userProfileChanged', handleUserProfileChanged);
       socket.off('userProfileResult', handleUserProfileResult);
     };
-  }, [user?.username, onMessageEdited, onMessageDeleted, onReactionUpdated, onConversationRead, setUserProfileCache, updateProfile]);
+  }, []);
 
   // Request group history when user enters the chat view
   useEffect(() => {
