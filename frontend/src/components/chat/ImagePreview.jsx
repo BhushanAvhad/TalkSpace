@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Maximize2, AlertCircle, Download, Loader2 } from 'lucide-react';
 import { ImageViewer } from './ImageViewer';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { getApiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 export function ImagePreview({ fileURL, fileName, isMe }) {
@@ -11,9 +12,10 @@ export function ImagePreview({ fileURL, fileName, isMe }) {
   const [viewerOpen, setViewerOpen] = useState(false);
 
   // Append authenticated username parameter for protected attachment verification
+  const resolvedURL = getApiUrl(fileURL);
   const secureURL = user?.username
-    ? `${fileURL}?user=${encodeURIComponent(user.username)}`
-    : fileURL;
+    ? `${resolvedURL}${resolvedURL.includes('?') ? '&' : '?'}user=${encodeURIComponent(user.username)}`
+    : resolvedURL;
 
   if (hasError) {
     return (
@@ -62,7 +64,7 @@ export function ImagePreview({ fileURL, fileName, isMe }) {
       {/* Full screen Lightbox Viewer */}
       {viewerOpen && (
         <ImageViewer
-          src={fileURL}
+          src={resolvedURL}
           alt={fileName}
           onClose={() => setViewerOpen(false)}
         />

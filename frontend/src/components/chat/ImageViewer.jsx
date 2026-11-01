@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { getApiUrl } from '@/lib/api';
 
 export function ImageViewer({ src, alt, onClose }) {
   const { user } = useAuthStore();
@@ -28,9 +29,10 @@ export function ImageViewer({ src, alt, onClose }) {
   if (!src) return null;
 
   // Append authenticated username parameter for protected attachment verification
+  const resolvedSrc = getApiUrl(src);
   const secureSrc = user?.username
-    ? `${src}?user=${encodeURIComponent(user.username)}`
-    : src;
+    ? `${resolvedSrc}${resolvedSrc.includes('?') ? '&' : '?'}user=${encodeURIComponent(user.username)}`
+    : resolvedSrc;
 
   return (
     <div

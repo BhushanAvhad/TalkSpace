@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { getApiUrl } from '@/lib/api';
 
 // Format bytes into human-readable size
 export function formatBytes(bytes, decimals = 1) {
@@ -82,9 +83,10 @@ export function DocumentCard({ fileURL, fileName, fileSize, isMe }) {
   const Icon = meta.icon;
 
   // Append authenticated username parameter for protected attachment verification
+  const resolvedURL = getApiUrl(fileURL);
   const secureDownloadURL = user?.username
-    ? `${fileURL}?user=${encodeURIComponent(user.username)}`
-    : fileURL;
+    ? `${resolvedURL}${resolvedURL.includes('?') ? '&' : '?'}user=${encodeURIComponent(user.username)}`
+    : resolvedURL;
 
   const handleDownload = () => {
     setDownloading(true);

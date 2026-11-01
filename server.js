@@ -2,21 +2,60 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
 const supabase = require('./supabaseClient');
 const { startRetentionScheduler, getRetentionHours, executeRetentionCleanup } = require('./retentionService');
+const {
+    uploadDir,
+    recordFilePermission,
+    uploadToSupabaseStorage,
+    verifyFileAccess,
+    getFileDelivery
+} = require('./storageService');
 
 const app = express();
 const server = http.createServer(app);
+
+// Allowed Origins for CORS (Vercel deployment, custom domain, local dev)
+const allowedOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.CLIENT_URL,
+    process.env.CORS_ORIGIN,
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000'
+].filter(Boolean);
+
+function isOriginAllowed(origin) {
+    if (!origin) return true; // Server-to-server or same-origin
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) return true;
+    if (origin.endsWith('.vercel.app')) return true; // Support Vercel preview & production domains
+    return false;
+}
+
 const io = new Server(server, {
     cors: {
-        origin: '*',
+        origin: (origin, callback) => {
+            callback(null, isOriginAllowed(origin));
+        },
+        credentials: true,
         methods: ['GET', 'POST'],
     },
 });
+
+app.use(cors({
+    origin: (origin, callback) => {
+        callback(null, isOriginAllowed(origin));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-talkspace-user']
+}));
 
 const PORT = process.env.PORT || 3000;
 const users = new Map(); // Store users as { socketId → { username, profileImage, statusText, bio } }
@@ -48,12 +87,6 @@ const DANGEROUS_EXTENSIONS = new Set([
     '.com', '.hta', '.app', '.vbe', '.jse', '.wsf', '.wsh'
 ]);
 
-// Protected Uploads Directory (outside public folder to prevent unauthorized static access)
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
-
 // Migrate legacy files from public/uploads if any existed
 const legacyUploadDir = path.join(__dirname, 'public', 'uploads');
 if (fs.existsSync(legacyUploadDir)) {
@@ -70,9 +103,6 @@ if (fs.existsSync(legacyUploadDir)) {
         // Migration completed or unneeded
     }
 }
-
-// In-memory registry for private file permissions: filename -> { sender, target }
-const privateFilePermissions = new Map();
 
 // Configure Multer Storage with Cryptographic Safe Filenames
 const storage = multer.diskStorage({
@@ -206,9 +236,9 @@ async function sendRecentGroupHistory(socket) {
 
 app.use(express.json());
 
-// Multi-file Advanced Upload Endpoint
+// Multi-file Advanced Upload Endpoint (Disk + Cloud Storage)
 app.post('/api/upload', (req, res) => {
-    upload.array('files', 10)(req, res, (err) => {
+    upload.array('files', 10)(req, res, async (err) => {
         if (err) {
             return res.status(400).json({ error: err.message || 'File upload failed.' });
         }
@@ -220,20 +250,23 @@ app.post('/api/upload', (req, res) => {
         const sender = (req.body.sender || '').trim();
         const target = (req.body.target || '').trim();
 
-        const uploadedFiles = req.files.map((file) => {
-            // If private, record permissions for access authorization
-            if (isPrivate && target) {
-                privateFilePermissions.set(file.filename, { sender, target });
-            }
+        const uploadedFiles = [];
+        for (const file of req.files) {
+            recordFilePermission(file.filename, sender, target, isPrivate);
 
-            return {
+            // Upload in background to Supabase Storage bucket for persistence on cloud hosts like Render
+            uploadToSupabaseStorage(file.filename, file.path, file.mimetype).catch((err) => {
+                console.warn(`[Upload] Background cloud upload notice:`, err.message);
+            });
+
+            uploadedFiles.push({
                 fileURL: `/api/files/${file.filename}`,
                 fileName: file.originalname,
                 storedName: file.filename,
                 fileSize: file.size,
                 fileType: file.mimetype
-            };
-        });
+            });
+        }
 
         res.json({ success: true, files: uploadedFiles });
     });
@@ -241,7 +274,7 @@ app.post('/api/upload', (req, res) => {
 
 // Single File Upload Endpoint (Backward-Compatible)
 app.post('/upload', (req, res) => {
-    upload.single('file')(req, res, (err) => {
+    upload.single('file')(req, res, async (err) => {
         if (err) {
             return res.status(400).json({ error: err.message || 'File upload failed.' });
         }
@@ -253,9 +286,8 @@ app.post('/upload', (req, res) => {
         const sender = (req.body.sender || '').trim();
         const target = (req.body.target || '').trim();
 
-        if (isPrivate && target) {
-            privateFilePermissions.set(req.file.filename, { sender, target });
-        }
+        recordFilePermission(req.file.filename, sender, target, isPrivate);
+        uploadToSupabaseStorage(req.file.filename, req.file.path, req.file.mimetype).catch(() => {});
 
         res.json({
             fileURL: `/api/files/${req.file.filename}`,
@@ -269,7 +301,7 @@ app.post('/upload', (req, res) => {
 
 // Profile Picture Upload Endpoint
 app.post('/uploadProfilePic', (req, res) => {
-    upload.any()(req, res, (err) => {
+    upload.any()(req, res, async (err) => {
         if (err) {
             return res.status(400).json({ error: err.message || 'Avatar upload failed.' });
         }
@@ -277,51 +309,66 @@ app.post('/uploadProfilePic', (req, res) => {
         if (!file) {
             return res.status(400).json({ error: 'No image file uploaded.' });
         }
+
+        uploadToSupabaseStorage(file.filename, file.path, file.mimetype).catch(() => {});
+
         const avatarUrl = `/api/files/${file.filename}`;
         res.json({ success: true, avatarUrl, fileURL: avatarUrl });
     });
 });
 
-// Protected File Serving Handler (Access Verification & Path Traversal Prevention)
-function handleFileRequest(req, res) {
-    // Path traversal defense: strip any directory paths
-    const filename = path.basename(req.params.filename);
-    const filePath = path.join(uploadDir, filename);
-
-    if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: 'File not found.' });
-    }
-
-    // Access control: verify authorization for private conversation attachments
-    const permission = privateFilePermissions.get(filename);
-    if (permission) {
+// Protected File Serving Handler (Access Verification, Supabase Storage Delivery & Path Traversal Prevention)
+async function handleFileRequest(req, res) {
+    try {
         const requestingUser = (req.query.user || req.headers['x-talkspace-user'] || '').trim().toLowerCase();
-        const isAuthorized =
-            requestingUser &&
-            (requestingUser === permission.sender.toLowerCase() ||
-             requestingUser === permission.target.toLowerCase());
+        const access = await verifyFileAccess(req.params.filename, requestingUser);
 
-        if (!isAuthorized) {
+        if (!access.authorized) {
             return res.status(403).json({ error: 'Forbidden. You do not have permission to access this private attachment.' });
         }
-    }
 
-    // Serve protected file
-    res.sendFile(filePath);
+        const delivery = await getFileDelivery(access.filename, access.isPrivate);
+
+        if (delivery.type === 'local') {
+            return res.sendFile(delivery.path);
+        } else if (delivery.type === 'redirect') {
+            return res.redirect(delivery.url);
+        } else if (delivery.type === 'buffer') {
+            res.setHeader('Content-Type', delivery.mimeType || 'application/octet-stream');
+            return res.send(delivery.buffer);
+        } else {
+            return res.status(404).json({ error: 'File not found.' });
+        }
+    } catch (err) {
+        console.error('Error serving file:', err);
+        res.status(500).json({ error: 'Internal server error while serving file.' });
+    }
 }
 
 app.get('/api/files/:filename', handleFileRequest);
 app.get('/uploads/:filename', handleFileRequest);
 
-// Health check & Retention status endpoint
-app.get('/api/health', (req, res) => {
-    res.json({
+// Simple Health Check Endpoint for Render / Load Balancers
+app.get('/health', (req, res) => {
+    res.status(200).json({
         status: 'ok',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Detailed Health & Retention status endpoint
+app.get('/api/health', (req, res) => {
+    res.status(200).json({
+        status: 'ok',
+        uptime: process.uptime(),
         supabaseConnected: !!process.env.SUPABASE_URL,
+        storageBucket: process.env.SUPABASE_STORAGE_BUCKET || 'talkspace-files',
         retentionPolicy: {
             groupRetentionHours: getRetentionHours(),
             privateRetention: 'lifetime'
-        }
+        },
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -1089,11 +1136,33 @@ io.on('connection', (socket) => {
     });
 });
 
-// Start the server
-server.listen(PORT, () => {
-    console.log(`🚀 TalkSpace server running directly on port ${PORT}`);
+// Start the server (bind to 0.0.0.0 for Render, Docker, and Cloud compatibility)
+const HOST = '0.0.0.0';
+server.listen(PORT, HOST, () => {
+    console.log(`🚀 TalkSpace server running on http://${HOST}:${PORT}`);
     console.log(`📡 Supabase database: ${process.env.SUPABASE_URL ? 'Connected' : 'Missing credentials in .env'}`);
+    console.log(`☁️ Supabase Storage bucket: ${process.env.SUPABASE_STORAGE_BUCKET || 'talkspace-files'}`);
     
     // Start automated hourly message retention and attachment cleanup scheduler
     startRetentionScheduler(io, uploadDir);
 });
+
+// Graceful shutdown handling for Render / Container orchestrators
+function handleGracefulShutdown(signal) {
+    console.log(`[Server] Received ${signal}. Shutting down TalkSpace gracefully...`);
+    server.close(() => {
+        console.log('[Server] HTTP and Socket.IO servers closed.');
+        process.exit(0);
+    });
+
+    // Force shutdown if connections do not close in time
+    setTimeout(() => {
+        console.error('[Server] Forced shutdown after timeout.');
+        process.exit(1);
+    }, 10000).unref();
+}
+
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
+
+module.exports = { app, server };

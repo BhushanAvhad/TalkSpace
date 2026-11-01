@@ -3,9 +3,13 @@ node_modules/
 
 # Environment Variables (Secrets)
 .env
-.env.local
+.env.*
+!.env.example
+*.env.local
 
 # Build artifacts & logs
+frontend/dist/
+dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

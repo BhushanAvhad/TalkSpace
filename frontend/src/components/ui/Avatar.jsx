@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
+import { getApiUrl } from '@/lib/api';
 
 export function Avatar({
   src,
@@ -50,7 +51,7 @@ export function Avatar({
     src.trim() !== '' &&
     src !== 'profile.png' &&
     src !== '/profile.png'
-      ? src
+      ? getApiUrl(src)
       : null;
 
   return (

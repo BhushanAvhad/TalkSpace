@@ -31,6 +31,7 @@ import { Input } from '@/components/ui/Input';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useChatStore } from '@/stores/useChatStore';
+import { getApiUrl } from '@/lib/api';
 import socket from '@/socket/socket';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -131,7 +132,7 @@ export function UserProfileModal({ open, onOpenChange, targetUsername }) {
 
     setIsUploading(true);
     try {
-      const res = await fetch('/uploadProfilePic', {
+      const res = await fetch(getApiUrl('/uploadProfilePic'), {
         method: 'POST',
         body: formData,
       });

@@ -1,14 +1,15 @@
 import { io } from 'socket.io-client';
+import { getSocketUrl } from '@/lib/api';
 
-// Connect directly to the unified server on port 3000
-const SOCKET_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+const SOCKET_URL = getSocketUrl();
 
 export const socket = io(SOCKET_URL, {
   autoConnect: false,
   reconnection: true,
-  reconnectionAttempts: 10,
+  reconnectionAttempts: 15,
   reconnectionDelay: 1000,
   transports: ['websocket', 'polling'],
+  withCredentials: true,
 });
 
 export default socket;

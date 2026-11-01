@@ -157,10 +157,6 @@ async function executeRetentionCleanup(options = {}) {
           continue;
         }
 
-        if (!fs.existsSync(filePath)) {
-          continue; // File already gone or was never stored locally
-        }
-
         // Verify if any remaining message in the database (group OR private) still references this file
         const { data: referencingMessages, error: refError } = await supabase
           .from('messages')
@@ -178,8 +174,18 @@ async function executeRetentionCleanup(options = {}) {
           continue;
         }
 
-        // Safe to delete physical file
-        fs.unlinkSync(filePath);
+        // Safe to delete orphaned file from local disk and Supabase Storage
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+
+        try {
+          const { deleteFromStorage } = require('./storageService');
+          await deleteFromStorage(safeBaseName);
+        } catch (storageErr) {
+          // Cloud storage deletion notice handled
+        }
+
         deletedFilesCount++;
         console.log(`[RetentionService] Safely deleted orphaned attachment file: ${safeBaseName}`);
       } catch (fileErr) {

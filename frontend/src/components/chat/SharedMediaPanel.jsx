@@ -17,6 +17,7 @@ import { ImageViewer } from './ImageViewer';
 import { formatBytes, getDocumentMeta } from './DocumentCard';
 import { useChatStore } from '@/stores/useChatStore';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { getApiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 export function SharedMediaPanel({ open, onClose }) {
@@ -152,9 +153,10 @@ export function SharedMediaPanel({ open, onClose }) {
             /* Images Grid View */
             <div className="grid grid-cols-2 gap-2">
               {images.map((imgMsg, idx) => {
+                const resolvedURL = getApiUrl(imgMsg.fileURL);
                 const secureSrc = user?.username
-                  ? `${imgMsg.fileURL}?user=${encodeURIComponent(user.username)}`
-                  : imgMsg.fileURL;
+                  ? `${resolvedURL}${resolvedURL.includes('?') ? '&' : '?'}user=${encodeURIComponent(user.username)}`
+                  : resolvedURL;
 
                 return (
                   <div
@@ -183,9 +185,10 @@ export function SharedMediaPanel({ open, onClose }) {
                 const meta = getDocumentMeta(item.fileName);
                 const Icon = isImg ? ImageIcon : meta.icon;
 
+                const resolvedURL = getApiUrl(item.fileURL);
                 const secureDownload = user?.username
-                  ? `${item.fileURL}?user=${encodeURIComponent(user.username)}`
-                  : item.fileURL;
+                  ? `${resolvedURL}${resolvedURL.includes('?') ? '&' : '?'}user=${encodeURIComponent(user.username)}`
+                  : resolvedURL;
 
                 return (
                   <div
@@ -242,7 +245,7 @@ export function SharedMediaPanel({ open, onClose }) {
       {/* Lightbox Viewer */}
       {viewerImage && (
         <ImageViewer
-          src={viewerImage.fileURL}
+          src={getApiUrl(viewerImage.fileURL)}
           alt={viewerImage.fileName}
           onClose={() => setViewerImage(null)}
         />

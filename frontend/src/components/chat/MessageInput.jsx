@@ -16,6 +16,7 @@ import { FilePreviewTray } from './FilePreviewTray';
 import { QuotedReplyPreview } from './QuotedReplyPreview';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useChatStore } from '@/stores/useChatStore';
+import { getApiUrl } from '@/lib/api';
 import { toast } from 'sonner';
 
 const EMOJI_CATEGORIES = {
@@ -210,7 +211,7 @@ export function MessageInput() {
     }
 
     try {
-      const response = await fetch('/api/upload', {
+      const response = await fetch(getApiUrl('/api/upload'), {
         method: 'POST',
         body: formData,
         signal: controller.signal,
